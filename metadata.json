@@ -1,0 +1,5 @@
+{
+  "name": "Sweetdreams Bedtime Stories",
+  "description": "A magical app that creates personalized bedtime stories for kids based on their imagination.",
+  "requestFramePermissions": ["microphone"]
+}
