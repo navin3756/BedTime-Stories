@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, Moon, Play, Pause, RotateCcw, ArrowLeft, Loader2, Volume2, Music, CloudRain, Trees, Stars, ChevronDown, Mic, MicOff, BookOpen, Trash2 } from 'lucide-react';
+import { Sparkles, Moon, Play, Pause, RotateCcw, ArrowLeft, Loader2, Volume2, Music, CloudRain, Trees, Stars, Mic, MicOff, BookOpen, Trash2 } from 'lucide-react';
 import { generateStoryOptions, generateFullStoryStream, generateStoryAudio, getLocalLlmLabel, isCloudStoryProviderConfigured, StoryOption, StoryPreferences } from './services/storyEngine';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -59,13 +59,15 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [bgMusicEnabled, setBgMusicEnabled] = useState(false);
   const [selectedMusicId, setSelectedMusicId] = useState('lullaby');
-  const [showMusicMenu, setShowMusicMenu] = useState(false);
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVoiceURI, setSelectedVoiceURI] = useState('');
   const [isListening, setIsListening] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const ambientRef = useRef<AmbientPlayer | null>(null);
   const narrationRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   const currentMusic = BG_MUSIC_TRACKS.find(t => t.id === selectedMusicId) || BG_MUSIC_TRACKS[0];
+  const selectedVoice = availableVoices.find(voice => voice.voiceURI === selectedVoiceURI) || null;
   const hasCloudProvider = isCloudStoryProviderConfigured();
   const localLlmLabel = getLocalLlmLabel();
 
@@ -78,6 +80,20 @@ export default function App() {
     } catch (error) {
       console.error("Unable to load saved stories:", error);
     }
+  }, []);
+
+  useEffect(() => {
+    if (!('speechSynthesis' in window)) return;
+
+    const loadVoices = () => {
+      const voices = window.speechSynthesis.getVoices();
+      setAvailableVoices(voices);
+      setSelectedVoiceURI(prev => prev || voices.find(voice => voice.default)?.voiceURI || voices[0]?.voiceURI || '');
+    };
+
+    loadVoices();
+    window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
+    return () => window.speechSynthesis.removeEventListener('voiceschanged', loadVoices);
   }, []);
 
   const updatePreferences = (key: keyof StoryPreferences, value: string) => {
@@ -198,16 +214,15 @@ export default function App() {
 
   const selectMusicTrack = (track: MusicTrack) => {
     setSelectedMusicId(track.id);
-    setBgMusicEnabled(true);
-    startAmbient(track);
+    if (bgMusicEnabled) {
+      startAmbient(track);
+    }
   };
 
-  useEffect(() => {
-    if (selectedStory) {
-      stopAmbient();
-      setBgMusicEnabled(false);
-    }
-  }, [selectedStory]);
+  const handleVoiceChange = (voiceURI: string) => {
+    stopNarration();
+    setSelectedVoiceURI(voiceURI);
+  };
 
   useEffect(() => () => stopAmbient(), []);
 
@@ -294,6 +309,9 @@ export default function App() {
     }
 
     const narration = new SpeechSynthesisUtterance(selectedStory.text);
+    if (selectedVoice) {
+      narration.voice = selectedVoice;
+    }
     narration.rate = 0.86;
     narration.pitch = 0.96;
     narration.volume = 0.9;
@@ -391,71 +409,6 @@ export default function App() {
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-purple-900/20 blur-[120px] rounded-full" />
         <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-indigo-900/20 blur-[120px] rounded-full" />
         <div className="absolute top-[20%] right-[10%] w-[30%] h-[30%] bg-blue-900/10 blur-[100px] rounded-full" />
-      </div>
-
-      {/* Music Control Center */}
-      <div className="fixed top-6 right-6 z-50 flex flex-col items-end gap-2">
-        <div className="flex items-center gap-2">
-          <AnimatePresence>
-            {showMusicMenu && (
-              <motion.div
-                initial={{ opacity: 0, x: 20, scale: 0.95 }}
-                animate={{ opacity: 1, x: 0, scale: 1 }}
-                exit={{ opacity: 0, x: 20, scale: 0.95 }}
-                className="bg-[#1a152e] border border-white/10 rounded-2xl p-2 flex gap-1 shadow-2xl"
-              >
-                {BG_MUSIC_TRACKS.map((track) => (
-                  <button
-                    key={track.id}
-                    onClick={() => selectMusicTrack(track)}
-                    className={cn(
-                      "p-2 rounded-xl transition-all flex flex-col items-center gap-1 min-w-[60px]",
-                      selectedMusicId === track.id 
-                        ? "bg-purple-500/20 text-purple-300 border border-purple-500/30" 
-                        : "text-white/40 hover:text-white hover:bg-white/5 border border-transparent"
-                    )}
-                  >
-                    <track.icon className="w-4 h-4" />
-                    <span className="text-[10px] font-medium uppercase tracking-wider">{track.name}</span>
-                  </button>
-                ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <div className="flex bg-[#1a152e] border border-white/10 rounded-full p-1 shadow-xl">
-            <button
-              onClick={() => setShowMusicMenu(!showMusicMenu)}
-              className={cn(
-                "p-2 rounded-full transition-all flex items-center gap-2 px-3",
-                showMusicMenu ? "bg-white/10 text-white" : "text-white/60 hover:text-white"
-              )}
-            >
-              <currentMusic.icon className="w-4 h-4" />
-              <span className="text-xs font-medium">{currentMusic.name}</span>
-              <ChevronDown className={cn("w-3 h-3 transition-transform", showMusicMenu && "rotate-180")} />
-            </button>
-            
-            <div className="w-[1px] bg-white/10 my-1 mx-1" />
-
-            <button
-              onClick={toggleBackgroundMusic}
-              className="p-2 bg-transparent rounded-full hover:bg-white/10 transition-all group"
-              title={bgMusicEnabled ? "Mute Background Music" : "Unmute Background Music"}
-            >
-              {bgMusicEnabled ? (
-                <Music className="w-4 h-4 text-purple-400" />
-              ) : (
-                <div className="relative">
-                  <Music className="w-4 h-4 text-purple-400/30" />
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="w-full h-[1.5px] bg-red-400/50 rotate-45" />
-                  </div>
-                </div>
-              )}
-            </button>
-          </div>
-        </div>
       </div>
 
       <main className="relative z-10 max-w-4xl mx-auto px-6 py-12 md:py-20 min-h-screen flex flex-col">
@@ -750,6 +703,70 @@ export default function App() {
                   </div>
 
                   <div className="mt-12 flex flex-col items-center space-y-8">
+                    <div className="grid w-full max-w-2xl grid-cols-1 gap-4 md:grid-cols-2">
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-left">
+                        <div className="mb-3 flex items-center gap-2 text-purple-200/70">
+                          <Volume2 className="h-4 w-4" />
+                          <h3 className="text-xs font-semibold uppercase tracking-[0.18em]">Story Voice</h3>
+                        </div>
+                        <select
+                          value={selectedVoiceURI}
+                          onChange={(e) => handleVoiceChange(e.target.value)}
+                          disabled={!availableVoices.length || isPlaying}
+                          className="w-full rounded-xl border border-white/10 bg-[#171126] px-4 py-3 text-sm text-purple-50 focus:outline-none focus:ring-2 focus:ring-purple-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {availableVoices.length ? (
+                            availableVoices.map(voice => (
+                              <option key={voice.voiceURI} value={voice.voiceURI}>
+                                {voice.name} {voice.lang ? `(${voice.lang})` : ''}
+                              </option>
+                            ))
+                          ) : (
+                            <option>Default browser voice</option>
+                          )}
+                        </select>
+                        <p className="mt-2 text-xs text-purple-200/40">
+                          Choose a voice before pressing play.
+                        </p>
+                      </div>
+
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-left">
+                        <div className="mb-3 flex items-center gap-2 text-purple-200/70">
+                          <Music className="h-4 w-4" />
+                          <h3 className="text-xs font-semibold uppercase tracking-[0.18em]">Background Music</h3>
+                        </div>
+                        <div className="flex gap-2">
+                          <select
+                            value={selectedMusicId}
+                            onChange={(e) => {
+                              const track = BG_MUSIC_TRACKS.find(item => item.id === e.target.value);
+                              if (track) selectMusicTrack(track);
+                            }}
+                            className="min-w-0 flex-1 rounded-xl border border-white/10 bg-[#171126] px-4 py-3 text-sm text-purple-50 focus:outline-none focus:ring-2 focus:ring-purple-500/40"
+                          >
+                            {BG_MUSIC_TRACKS.map(track => (
+                              <option key={track.id} value={track.id}>{track.name}</option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={toggleBackgroundMusic}
+                            className={cn(
+                              "rounded-xl px-4 py-3 text-sm font-semibold transition-colors",
+                              bgMusicEnabled
+                                ? "bg-purple-500/20 text-purple-100 hover:bg-purple-500/30"
+                                : "bg-purple-600 text-white hover:bg-purple-500"
+                            )}
+                          >
+                            {bgMusicEnabled ? "Stop" : "Play"}
+                          </button>
+                        </div>
+                        <p className="mt-2 text-xs text-purple-200/40">
+                          Select a track, then play it manually.
+                        </p>
+                      </div>
+                    </div>
+
                     <div className="flex items-center gap-8">
                       <motion.button
                         whileHover={{ scale: 1.1 }}
