@@ -7,3 +7,8 @@ coverage/
 .env*
 !.env.example
 .vercel
+
+# Android release signing secrets
+android/keystore.properties
+android/*.jks
+android/*.keystore

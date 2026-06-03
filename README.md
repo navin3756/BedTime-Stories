@@ -62,6 +62,32 @@ If more than one Android target is connected, run the script directly with a ser
 powershell -ExecutionPolicy Bypass -File scripts/android-install-debug.ps1 -SkipBuild -Serial emulator-5554 -CaptureArtifacts
 ```
 
+## Google Play Release Build
+
+Google Play uploads should use a signed Android App Bundle (`.aab`).
+
+Create an upload key once and keep it private:
+
+```powershell
+$env:JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"
+& "$env:JAVA_HOME\bin\keytool.exe" -genkeypair -v -keystore android\upload-keystore.jks -alias sweetdreams-upload -keyalg RSA -keysize 2048 -validity 10000
+Copy-Item android\keystore.properties.example android\keystore.properties
+```
+
+Edit `android\keystore.properties` with the keystore and key passwords. Then build the release bundle:
+
+```powershell
+npm run android:bundle
+```
+
+The Play Console upload artifact is written to:
+
+```text
+android/app/build/outputs/bundle/release/app-release.aab
+```
+
+Play Store listing and policy drafts live in `play-store/`.
+
 ## Family Voice Studio
 
 Voice cloning is optional and requires an ElevenLabs API key on the server:
