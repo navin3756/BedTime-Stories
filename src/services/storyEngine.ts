@@ -249,6 +249,19 @@ Keep it gentle, imaginative, reassuring, and easy to read aloud. Do not include 
   }
 }
 
-export async function generateStoryAudio(_text?: string): Promise<string | null> {
-  return null;
+export async function generateStoryAudio(text?: string, voiceId?: string): Promise<string | null> {
+  if (!text?.trim() || !voiceId) return null;
+
+  const response = await fetch("/api/story-audio", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, voiceId }),
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || "Cloned narration could not be created.");
+  }
+
+  return URL.createObjectURL(await response.blob());
 }
