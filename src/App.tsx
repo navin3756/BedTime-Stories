@@ -102,6 +102,51 @@ const ROUTINE_PRESETS = [
   },
 ];
 
+interface QuickStoryIdea extends StoryOption {
+  prompt: string;
+  preferences: Partial<StoryPreferences>;
+  readLabel: string;
+}
+
+const QUICK_STORY_IDEAS: QuickStoryIdea[] = [
+  {
+    id: 'quick-moon-garden',
+    title: 'The Moon Garden Path',
+    summary: 'A sleepy walk through a moonlit garden where every glowing flower teaches one calm breath before bed.',
+    prompt: 'a moonlit garden where glowing flowers teach calm breathing',
+    readLabel: 'Calm breathing',
+    preferences: {
+      mood: 'gentle and magical',
+      comfortFocus: 'falling asleep peacefully',
+      length: 'tiny - about 1 minute',
+    },
+  },
+  {
+    id: 'quick-cloud-library',
+    title: 'The Cloud Library',
+    summary: 'A soft cloud library opens a bedtime book that turns worries into quiet silver stars.',
+    prompt: 'a cloud library where worries become quiet silver stars',
+    readLabel: 'Let worries go',
+    preferences: {
+      mood: 'brave and reassuring',
+      comfortFocus: 'letting go of big feelings',
+      length: 'short - about 3 minutes',
+    },
+  },
+  {
+    id: 'quick-blanket-boat',
+    title: 'The Blanket Boat',
+    summary: 'A cozy blanket boat floats across a warm night sky, carrying a little dreamer toward peaceful sleep.',
+    prompt: 'a cozy blanket boat floating across a warm night sky',
+    readLabel: 'Sleepy journey',
+    preferences: {
+      mood: 'gentle and magical',
+      comfortFocus: 'falling asleep peacefully',
+      length: 'short - about 3 minutes',
+    },
+  },
+];
+
 function voiceScore(voice: SpeechSynthesisVoice): number {
   const name = voice.name.toLowerCase();
   let score = voice.default ? 4 : 0;
@@ -519,14 +564,14 @@ export default function App() {
     }, 1000);
   };
 
-  const saveStory = (title: string, text: string) => {
+  const saveStory = (title: string, text: string, storyPrompt = prompt) => {
     if (!text.trim()) return;
 
     const story: SavedStory = {
       id: `${Date.now()}`,
       title,
       text,
-      prompt,
+      prompt: storyPrompt,
       createdAt: new Date().toISOString(),
     };
 
@@ -656,8 +701,7 @@ export default function App() {
     if (!sleepTimerMinutes) clearSleepTimer();
   }, [sleepTimerMinutes]);
 
-  const handleGenerateOptions = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const showStoryChoices = async () => {
     if (!prompt.trim()) return;
 
     setLoading(true);
@@ -672,6 +716,35 @@ export default function App() {
     } catch (error) {
       console.error("Error generating options:", error);
       setError(error instanceof Error ? error.message : "We couldn't create story ideas. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGenerateOptions = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await showStoryChoices();
+  };
+
+  const handleTellOwnStory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const customPrompt = prompt.trim();
+    if (!customPrompt) return;
+
+    setLoading(true);
+    setError('');
+    setOptions([]);
+    try {
+      const storyOptions = await generateStoryOptions(customPrompt, preferences);
+      const firstOption = storyOptions[0];
+      if (!firstOption) {
+        setError("No story idea came back. Try a little more detail in the prompt.");
+        return;
+      }
+      await handleSelectStory(firstOption, { autoRead: true, promptText: customPrompt });
+    } catch (error) {
+      console.error("Error starting story:", error);
+      setError(error instanceof Error ? error.message : "We couldn't start that story. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -695,16 +768,22 @@ export default function App() {
     }
   };
 
-  const handleSelectStory = async (option: StoryOption) => {
+  const handleSelectStory = async (
+    option: StoryOption,
+    settings: { autoRead?: boolean; promptText?: string; preferencesOverride?: StoryPreferences } = {},
+  ) => {
     stopNarration();
     clearStoryAudioUrl();
     setLoading(true);
     setSelectedStory({ title: option.title, text: '', audioUrl: null });
+
+    const storyPreferences = settings.preferencesOverride || preferences;
+    const storyPrompt = settings.promptText || prompt;
     
     let fullText = '';
     try {
       setError('');
-      const stream = generateFullStoryStream(option.title, option.summary, preferences);
+      const stream = generateFullStoryStream(option.title, option.summary, storyPreferences);
       setLoading(false); // Stop main loading as we start streaming text
 
       for await (const chunk of stream) {
@@ -712,12 +791,16 @@ export default function App() {
         setSelectedStory(prev => prev ? { ...prev, text: fullText } : null);
       }
 
-      saveStory(option.title, fullText);
+      saveStory(option.title, fullText, storyPrompt);
       completeRoutineStep('story');
 
       // Once text is complete, start audio generation in background
       if (selectedFamilyVoice && !selectedFamilyVoice.requiresVerification) {
         await createClonedStoryAudio(fullText, selectedFamilyVoice);
+      }
+
+      if (settings.autoRead && !(selectedFamilyVoice && !selectedFamilyVoice.requiresVerification)) {
+        startBrowserNarration(fullText);
       }
     } catch (error) {
       console.error("Error generating story:", error);
@@ -727,43 +810,25 @@ export default function App() {
     }
   };
 
-  const togglePlay = () => {
-    if (!selectedStory) return;
+  const handleQuickStory = async (idea: QuickStoryIdea) => {
+    const quickPreferences = { ...preferences, ...idea.preferences };
+    setPrompt(idea.prompt);
+    setPreferences(quickPreferences);
+    setOptions([]);
+    await handleSelectStory(idea, {
+      autoRead: true,
+      promptText: idea.prompt,
+      preferencesOverride: quickPreferences,
+    });
+  };
 
-    if (selectedFamilyVoice && !selectedStory.audioUrl) {
-      if (selectedFamilyVoice.requiresVerification) {
-        setError("This family voice still needs provider verification before it can narrate.");
-        return;
-      }
-      void createClonedStoryAudio(selectedStory.text);
-      return;
-    }
-
-    if (audioRef.current) {
-      if (isPlaying) {
-        audioRef.current.pause();
-        setIsPlaying(false);
-      } else {
-        audioRef.current.play().catch(e => {
-          console.error("Playback failed:", e);
-          setIsPlaying(false);
-        });
-        setIsPlaying(true);
-        completeRoutineStep('story');
-        startSleepTimerIfNeeded();
-      }
-      return;
-    }
-
+  const startBrowserNarration = (storyText: string) => {
     if (!('speechSynthesis' in window)) {
       setError("Read aloud is not supported in this browser, but the story is ready to read.");
       return;
     }
 
-    if (isPlaying) {
-      stopNarration();
-      return;
-    }
+    if (!storyText.trim()) return;
 
     stopNarration();
     narrationStopRequestedRef.current = false;
@@ -772,7 +837,7 @@ export default function App() {
     completeRoutineStep('story');
     startSleepTimerIfNeeded();
 
-    const segments = splitNarrationText(selectedStory.text);
+    const segments = splitNarrationText(storyText);
     let index = 0;
     const narrationSettings = getBrowserNarrationSettings(selectedNarrationPreset);
     const shouldUseAndroidFallback = isAndroidSpeechRuntime();
@@ -868,6 +933,42 @@ export default function App() {
     };
 
     speakNext();
+  };
+
+  const togglePlay = () => {
+    if (!selectedStory) return;
+
+    if (selectedFamilyVoice && !selectedStory.audioUrl) {
+      if (selectedFamilyVoice.requiresVerification) {
+        setError("This family voice still needs provider verification before it can narrate.");
+        return;
+      }
+      void createClonedStoryAudio(selectedStory.text);
+      return;
+    }
+
+    if (audioRef.current) {
+      if (isPlaying) {
+        audioRef.current.pause();
+        setIsPlaying(false);
+      } else {
+        audioRef.current.play().catch(e => {
+          console.error("Playback failed:", e);
+          setIsPlaying(false);
+        });
+        setIsPlaying(true);
+        completeRoutineStep('story');
+        startSleepTimerIfNeeded();
+      }
+      return;
+    }
+
+    if (isPlaying) {
+      stopNarration();
+      return;
+    }
+
+    startBrowserNarration(selectedStory.text);
   };
 
   useEffect(() => {
@@ -984,7 +1085,51 @@ export default function App() {
                 </p>
               </div>
 
-              <form onSubmit={handleGenerateOptions} className="w-full max-w-2xl relative group space-y-4">
+              <section className="w-full max-w-3xl text-left space-y-4">
+                <div className="flex items-center gap-2 text-purple-200/70">
+                  <Sparkles className="w-4 h-4" />
+                  <h2 className="text-sm font-semibold uppercase tracking-[0.2em]">Tap a Story to Hear</h2>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {QUICK_STORY_IDEAS.map(idea => (
+                    <button
+                      key={idea.id}
+                      type="button"
+                      onClick={() => void handleQuickStory(idea)}
+                      disabled={loading}
+                      className="group rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-left transition-all hover:border-purple-400/40 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <span className="rounded-full bg-purple-500/15 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-purple-100/70">
+                          {idea.readLabel}
+                        </span>
+                        <span className="rounded-full bg-purple-600 p-2 text-white shadow-lg shadow-purple-950/30 transition-transform group-hover:scale-105">
+                          <Play className="h-3.5 w-3.5 fill-current" />
+                        </span>
+                      </div>
+                      <p className="font-serif text-lg text-white">{idea.title}</p>
+                      <p className="mt-1 text-sm leading-relaxed text-purple-200/50">{idea.summary}</p>
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <form onSubmit={handleTellOwnStory} className="w-full max-w-2xl relative group space-y-4">
+                <div className="flex items-center justify-between gap-4 text-left">
+                  <div>
+                    <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-purple-200/70">Or Make Your Own</h2>
+                    <p className="mt-1 text-sm text-purple-200/45">Type or speak an idea, then start the story in one step.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void showStoryChoices()}
+                    disabled={loading || !prompt.trim()}
+                    className="shrink-0 rounded-xl border border-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-purple-100/60 transition-colors hover:bg-white/10 hover:text-purple-100 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Show 3 choices
+                  </button>
+                </div>
                 <div className="relative flex items-center">
                   <input
                     type="text"
@@ -1012,7 +1157,7 @@ export default function App() {
                       className="px-6 py-3 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-900/50 disabled:cursor-not-allowed text-white rounded-xl font-medium transition-all flex items-center gap-2 shadow-lg shadow-purple-900/20"
                     >
                       {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
-                      <span>Weave</span>
+                      <span>Tell story</span>
                     </button>
                   </div>
                 </div>
