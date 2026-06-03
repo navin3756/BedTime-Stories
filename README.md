@@ -44,6 +44,24 @@ android\gradlew.bat -p android assembleDebug
 
 The debug APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
 
+To install the debug APK on a connected phone or fully booted emulator:
+
+```powershell
+npm run android:install
+```
+
+For a faster reinstall after the APK is already built, with screenshot, UI dump, and logcat artifacts:
+
+```powershell
+npm run android:test:install
+```
+
+If more than one Android target is connected, run the script directly with a serial:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/android-install-debug.ps1 -SkipBuild -Serial emulator-5554 -CaptureArtifacts
+```
+
 ## Family Voice Studio
 
 Voice cloning is optional and requires an ElevenLabs API key on the server:

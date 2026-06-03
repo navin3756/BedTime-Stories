@@ -10,7 +10,9 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "android:sync": "npm run build && npx cap sync",
-    "android:open": "npx cap open android"
+    "android:open": "npx cap open android",
+    "android:install": "powershell -ExecutionPolicy Bypass -File scripts/android-install-debug.ps1",
+    "android:test:install": "powershell -ExecutionPolicy Bypass -File scripts/android-install-debug.ps1 -SkipBuild -CaptureArtifacts"
   },
   "dependencies": {
     "@capacitor/android": "^8.3.4",
