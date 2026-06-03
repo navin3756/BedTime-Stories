@@ -4,6 +4,7 @@ import { Sparkles, Moon, Play, Pause, RotateCcw, ArrowLeft, Loader2, Volume2, Mu
 import { generateStoryOptions, generateFullStoryStream, generateStoryAudio, getLocalLlmLabel, isCloudStoryProviderConfigured, StoryOption, StoryPreferences } from './services/storyEngine';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -147,6 +148,15 @@ const QUICK_STORY_IDEAS: QuickStoryIdea[] = [
   },
 ];
 
+interface NativeTtsPlugin {
+  isAvailable(): Promise<{ available: boolean }>;
+  speak(options: { text: string; rate: number; pitch: number; volume: number }): Promise<void>;
+  stop(): Promise<void>;
+  addListener(eventName: 'started' | 'finished' | 'error', listenerFunc: (payload?: { error?: string; code?: number }) => void): Promise<PluginListenerHandle>;
+}
+
+const NativeTts = registerPlugin<NativeTtsPlugin>('NativeTts');
+
 function voiceScore(voice: SpeechSynthesisVoice): number {
   const name = voice.name.toLowerCase();
   let score = voice.default ? 4 : 0;
@@ -179,6 +189,10 @@ function getBrowserNarrationSettings(preset: NarrationPreset): NarrationPreset {
     pitch: Math.max(preset.pitch, ANDROID_SPEECH_MIN_PITCH),
     pauseMs: Math.max(preset.pauseMs, 850),
   };
+}
+
+function canUseNativeTts(): boolean {
+  return Capacitor.isNativePlatform();
 }
 
 function splitNarrationText(text: string): string[] {
@@ -485,6 +499,9 @@ export default function App() {
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
+    if (canUseNativeTts()) {
+      void NativeTts.stop().catch(error => console.warn("Native TTS stop failed:", error));
+    }
     narrationRef.current = null;
     setIsPlaying(false);
   };
@@ -701,6 +718,34 @@ export default function App() {
     if (!sleepTimerMinutes) clearSleepTimer();
   }, [sleepTimerMinutes]);
 
+  useEffect(() => {
+    if (!canUseNativeTts()) return;
+
+    let mounted = true;
+    const handles: PluginListenerHandle[] = [];
+
+    NativeTts.addListener('finished', () => {
+      if (mounted) setIsPlaying(false);
+    }).then(handle => handles.push(handle)).catch(error => {
+      console.warn("Native TTS finished listener failed:", error);
+    });
+
+    NativeTts.addListener('error', (payload) => {
+      if (!mounted) return;
+      setIsPlaying(false);
+      setError(payload?.error || "Read aloud stopped unexpectedly. Try another voice, or read the story on screen.");
+    }).then(handle => handles.push(handle)).catch(error => {
+      console.warn("Native TTS error listener failed:", error);
+    });
+
+    return () => {
+      mounted = false;
+      handles.forEach(handle => {
+        void handle.remove();
+      });
+    };
+  }, []);
+
   const showStoryChoices = async () => {
     if (!prompt.trim()) return;
 
@@ -800,7 +845,10 @@ export default function App() {
       }
 
       if (settings.autoRead && !(selectedFamilyVoice && !selectedFamilyVoice.requiresVerification)) {
-        startBrowserNarration(fullText);
+        const handledByNative = await startNativeNarration(fullText);
+        if (!handledByNative) {
+          startBrowserNarration(fullText);
+        }
       }
     } catch (error) {
       console.error("Error generating story:", error);
@@ -820,6 +868,31 @@ export default function App() {
       promptText: idea.prompt,
       preferencesOverride: quickPreferences,
     });
+  };
+
+  const startNativeNarration = async (storyText: string): Promise<boolean> => {
+    if (!canUseNativeTts() || !storyText.trim()) return false;
+
+    try {
+      const narrationSettings = selectedNarrationPreset;
+      stopNarration();
+      setError('');
+      setIsPlaying(true);
+      completeRoutineStep('story');
+      startSleepTimerIfNeeded();
+      await NativeTts.speak({
+        text: storyText,
+        rate: narrationSettings.rate,
+        pitch: narrationSettings.pitch,
+        volume: narrationSettings.volume,
+      });
+      return true;
+    } catch (error) {
+      console.warn("Native read-aloud failed:", error);
+      setIsPlaying(false);
+      setError(error instanceof Error ? error.message : "Read aloud stopped unexpectedly. Try another voice, or read the story on screen.");
+      return true;
+    }
   };
 
   const startBrowserNarration = (storyText: string) => {
@@ -968,7 +1041,11 @@ export default function App() {
       return;
     }
 
-    startBrowserNarration(selectedStory.text);
+    void startNativeNarration(selectedStory.text).then(handledByNative => {
+      if (!handledByNative) {
+        startBrowserNarration(selectedStory.text);
+      }
+    });
   };
 
   useEffect(() => {
