@@ -37,6 +37,7 @@ interface NarrationPreset {
 const STORY_LIBRARY_KEY = 'sweetdreams.savedStories';
 const STORY_PROFILE_KEY = 'sweetdreams.storyProfile';
 const FAMILY_VOICES_KEY = 'sweetdreams.familyVoices';
+const MAX_BROWSER_NARRATION_CHARS = 180;
 
 const VOICE_SAMPLE_PARAGRAPH = `I confirm this is my own voice, and I want Sweetdreams to create a private bedtime voice for my family. Tonight, take a slow breath with me. You are safe, you are loved, and this story is here to help you rest.`;
 
@@ -119,7 +120,29 @@ function splitNarrationText(text: string): string[] {
     .split(/\n+/)
     .flatMap(paragraph => paragraph.match(/[^.!?]+[.!?"]*/g) || [paragraph])
     .map(segment => segment.replace(/\s+/g, ' ').trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .flatMap(segment => splitLongNarrationSegment(segment));
+}
+
+function splitLongNarrationSegment(segment: string): string[] {
+  if (segment.length <= MAX_BROWSER_NARRATION_CHARS) return [segment];
+
+  const chunks: string[] = [];
+  let current = '';
+  const words = segment.split(' ');
+
+  words.forEach(word => {
+    const next = current ? `${current} ${word}` : word;
+    if (next.length > MAX_BROWSER_NARRATION_CHARS && current) {
+      chunks.push(current);
+      current = word;
+      return;
+    }
+    current = next;
+  });
+
+  if (current) chunks.push(current);
+  return chunks;
 }
 
 function formatTimer(seconds: number): string {
@@ -181,8 +204,11 @@ export default function App() {
   const ambientRef = useRef<AmbientPlayer | null>(null);
   const narrationRef = useRef<SpeechSynthesisUtterance | null>(null);
   const narrationTimeoutRef = useRef<number | null>(null);
+  const narrationSessionRef = useRef(0);
+  const narrationStopRequestedRef = useRef(false);
   const voiceMediaRecorderRef = useRef<MediaRecorder | null>(null);
   const voiceChunksRef = useRef<Blob[]>([]);
+  const storyAudioUrlRef = useRef('');
   const sleepTimerIntervalRef = useRef<number | null>(null);
   const sleepTimerEndRef = useRef<number | null>(null);
   const breathingIntervalRef = useRef<number | null>(null);
@@ -306,6 +332,26 @@ export default function App() {
     setIsRecordingVoice(false);
   };
 
+  const clearStoryAudioUrl = () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.removeAttribute('src');
+      audioRef.current.load();
+    }
+    if (storyAudioUrlRef.current) {
+      URL.revokeObjectURL(storyAudioUrlRef.current);
+      storyAudioUrlRef.current = '';
+    }
+  };
+
+  const setStoryAudioUrl = (audioUrl: string | null) => {
+    if (storyAudioUrlRef.current && storyAudioUrlRef.current !== audioUrl) {
+      URL.revokeObjectURL(storyAudioUrlRef.current);
+    }
+    storyAudioUrlRef.current = audioUrl || '';
+    setSelectedStory(prev => prev ? { ...prev, audioUrl } : null);
+  };
+
   const createFamilyVoice = async () => {
     if (!voiceRecordingBlob || !voiceName.trim() || !voiceConsent) return;
 
@@ -320,6 +366,9 @@ export default function App() {
 
       const response = await fetch('/api/voice-clone', {
         method: 'POST',
+        headers: {
+          'X-Voice-Consent': 'confirmed',
+        },
         body: formData,
       });
       const data = await response.json().catch(() => ({}));
@@ -352,6 +401,8 @@ export default function App() {
   };
 
   const stopNarration = () => {
+    narrationStopRequestedRef.current = true;
+    narrationSessionRef.current += 1;
     if (narrationTimeoutRef.current) {
       window.clearTimeout(narrationTimeoutRef.current);
       narrationTimeoutRef.current = null;
@@ -454,6 +505,7 @@ export default function App() {
 
   const openSavedStory = (story: SavedStory) => {
     stopNarration();
+    clearStoryAudioUrl();
     setError('');
     setOptions([]);
     setPrompt(story.prompt);
@@ -558,6 +610,7 @@ export default function App() {
 
   useEffect(() => () => {
     voiceMediaRecorderRef.current?.stop();
+    clearStoryAudioUrl();
     stopAmbient();
     clearSleepTimer();
     stopBreathing();
@@ -600,7 +653,7 @@ export default function App() {
     setAudioLoading(true);
     try {
       const audio = await generateStoryAudio(storyText, voiceProfile.voiceId);
-      setSelectedStory(prev => prev ? { ...prev, audioUrl: audio } : null);
+      setStoryAudioUrl(audio);
       setIsPlaying(Boolean(audio));
       return audio;
     } catch (error) {
@@ -614,6 +667,7 @@ export default function App() {
 
   const handleSelectStory = async (option: StoryOption) => {
     stopNarration();
+    clearStoryAudioUrl();
     setLoading(true);
     setSelectedStory({ title: option.title, text: '', audioUrl: null });
     
@@ -681,7 +735,9 @@ export default function App() {
       return;
     }
 
-    window.speechSynthesis.cancel();
+    stopNarration();
+    narrationStopRequestedRef.current = false;
+    const narrationSessionId = narrationSessionRef.current;
     setIsPlaying(true);
     completeRoutineStep('story');
     startSleepTimerIfNeeded();
@@ -690,6 +746,10 @@ export default function App() {
     let index = 0;
 
     const speakNext = () => {
+      if (narrationStopRequestedRef.current || narrationSessionId !== narrationSessionRef.current) {
+        return;
+      }
+
       const segment = segments[index];
       if (!segment) {
         narrationRef.current = null;
@@ -701,19 +761,34 @@ export default function App() {
       const narration = new SpeechSynthesisUtterance(segment);
       if (selectedVoice) {
         narration.voice = selectedVoice;
+        narration.lang = selectedVoice.lang;
+      } else {
+        narration.lang = 'en-US';
       }
       narration.rate = selectedNarrationPreset.rate;
       narration.pitch = selectedNarrationPreset.pitch;
       narration.volume = 0.92;
       narration.onend = () => {
+        if (narrationStopRequestedRef.current || narrationSessionId !== narrationSessionRef.current) {
+          return;
+        }
         index += 1;
         narrationTimeoutRef.current = window.setTimeout(speakNext, selectedNarrationPreset.pauseMs);
       };
-      narration.onerror = () => {
+      narration.onerror = (event) => {
+        if (
+          narrationStopRequestedRef.current ||
+          narrationSessionId !== narrationSessionRef.current ||
+          event.error === 'canceled' ||
+          event.error === 'interrupted'
+        ) {
+          return;
+        }
+
         narrationRef.current = null;
         narrationTimeoutRef.current = null;
         setIsPlaying(false);
-        setError("Read aloud stopped unexpectedly. Try another voice, or read the story on screen.");
+        setError("This browser voice could not finish the read-aloud. Try another voice, or use a family cloned voice when configured.");
       };
 
       narrationRef.current = narration;
@@ -751,6 +826,7 @@ export default function App() {
 
   const reset = () => {
     stopNarration();
+    clearStoryAudioUrl();
     clearSleepTimer();
     stopBreathing();
     setPrompt('');
@@ -1193,6 +1269,7 @@ export default function App() {
                 <button 
                   onClick={() => {
                     stopNarration();
+                    clearStoryAudioUrl();
                     setSelectedStory(null);
                   }}
                   className="flex items-center gap-2 text-purple-300/60 hover:text-purple-300 transition-colors"
@@ -1310,7 +1387,7 @@ export default function App() {
                             value={selectedFamilyVoiceId}
                             onChange={(e) => {
                               setSelectedFamilyVoiceId(e.target.value);
-                              setSelectedStory(prev => prev ? { ...prev, audioUrl: null } : null);
+                              setStoryAudioUrl(null);
                               stopNarration();
                             }}
                             disabled={isPlaying}

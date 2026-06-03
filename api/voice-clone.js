@@ -4,10 +4,19 @@ export const config = {
   },
 };
 
-async function readRequestBody(req) {
+const MAX_VOICE_SAMPLE_BYTES = 12 * 1024 * 1024;
+
+async function readRequestBody(req, maxBytes) {
   const chunks = [];
+  let totalBytes = 0;
+
   for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buffer.length;
+    if (totalBytes > maxBytes) {
+      throw new Error("VOICE_SAMPLE_TOO_LARGE");
+    }
+    chunks.push(buffer);
   }
   return Buffer.concat(chunks);
 }
@@ -25,6 +34,11 @@ export default async function handler(req, res) {
     return;
   }
 
+  if (req.headers["x-voice-consent"] !== "confirmed") {
+    res.status(403).json({ error: "Voice consent confirmation is required." });
+    return;
+  }
+
   try {
     const contentType = req.headers["content-type"];
     if (!contentType?.includes("multipart/form-data")) {
@@ -32,7 +46,13 @@ export default async function handler(req, res) {
       return;
     }
 
-    const body = await readRequestBody(req);
+    const contentLength = Number(req.headers["content-length"] || 0);
+    if (contentLength > MAX_VOICE_SAMPLE_BYTES) {
+      res.status(413).json({ error: "Voice sample is too large." });
+      return;
+    }
+
+    const body = await readRequestBody(req, MAX_VOICE_SAMPLE_BYTES);
     const response = await fetch("https://api.elevenlabs.io/v1/voices/add", {
       method: "POST",
       headers: {
@@ -56,6 +76,11 @@ export default async function handler(req, res) {
       requiresVerification: Boolean(data.requires_verification),
     });
   } catch (error) {
+    if (error instanceof Error && error.message === "VOICE_SAMPLE_TOO_LARGE") {
+      res.status(413).json({ error: "Voice sample is too large." });
+      return;
+    }
+
     console.error("Voice clone failed:", error);
     res.status(500).json({ error: "Voice cloning failed. Please try again." });
   }

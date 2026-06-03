@@ -20,6 +20,11 @@ export default async function handler(req, res) {
       return;
     }
 
+    if (!/^[A-Za-z0-9_-]{8,128}$/.test(voiceId)) {
+      res.status(400).json({ error: "Invalid cloned voice id." });
+      return;
+    }
+
     const narrationText = String(text || "").replace(/\s+/g, " ").trim().slice(0, MAX_NARRATION_CHARS);
     if (!narrationText) {
       res.status(400).json({ error: "Missing story text." });
