@@ -31,6 +31,7 @@ interface NarrationPreset {
   name: string;
   rate: number;
   pitch: number;
+  volume: number;
   pauseMs: number;
 }
 
@@ -62,9 +63,10 @@ const SLEEP_TIMER_OPTIONS = [
   { minutes: 30, label: '30 min' },
 ];
 const NARRATION_PRESETS: NarrationPreset[] = [
-  { id: 'bedtime', name: 'Bedtime soft', rate: 0.72, pitch: 0.86, pauseMs: 620 },
-  { id: 'gentle', name: 'Gentle storyteller', rate: 0.82, pitch: 0.94, pauseMs: 420 },
-  { id: 'whisper', name: 'Very slow calm', rate: 0.62, pitch: 0.78, pauseMs: 780 },
+  { id: 'calm', name: 'Sweetdreams Calm', rate: 0.56, pitch: 0.76, volume: 0.78, pauseMs: 980 },
+  { id: 'bedtime', name: 'Bedtime soft', rate: 0.72, pitch: 0.86, volume: 0.88, pauseMs: 620 },
+  { id: 'gentle', name: 'Gentle storyteller', rate: 0.82, pitch: 0.94, volume: 0.92, pauseMs: 420 },
+  { id: 'whisper', name: 'Very slow calm', rate: 0.62, pitch: 0.78, volume: 0.82, pauseMs: 780 },
 ];
 
 const ROUTINE_PRESETS = [
@@ -105,6 +107,7 @@ function voiceScore(voice: SpeechSynthesisVoice): number {
   if (name.includes('zira') || name.includes('samantha') || name.includes('aria') || name.includes('jenny')) score += 12;
   if (name.includes('susan') || name.includes('sonia') || name.includes('serena') || name.includes('ava')) score += 10;
   if (name.includes('female') || name.includes('natural') || name.includes('neural')) score += 8;
+  if (name.includes('calm') || name.includes('soft') || name.includes('whisper')) score += 8;
   if (name.includes('google uk english female')) score += 12;
   if (name.includes('david') || name.includes('mark') || name.includes('male')) score -= 5;
 
@@ -184,7 +187,7 @@ export default function App() {
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoiceURI, setSelectedVoiceURI] = useState('');
   const [selectedFamilyVoiceId, setSelectedFamilyVoiceId] = useState('');
-  const [selectedNarrationPresetId, setSelectedNarrationPresetId] = useState('bedtime');
+  const [selectedNarrationPresetId, setSelectedNarrationPresetId] = useState('calm');
   const [voiceCloneConfigured, setVoiceCloneConfigured] = useState(false);
   const [voiceName, setVoiceName] = useState('Mom bedtime voice');
   const [voiceConsent, setVoiceConsent] = useState(false);
@@ -767,7 +770,7 @@ export default function App() {
       }
       narration.rate = selectedNarrationPreset.rate;
       narration.pitch = selectedNarrationPreset.pitch;
-      narration.volume = 0.92;
+      narration.volume = selectedNarrationPreset.volume;
       narration.onend = () => {
         if (narrationStopRequestedRef.current || narrationSessionId !== narrationSessionRef.current) {
           return;
@@ -1393,7 +1396,7 @@ export default function App() {
                             disabled={isPlaying}
                             className="w-full rounded-xl border border-white/10 bg-[#171126] px-4 py-3 text-sm text-purple-50 focus:outline-none focus:ring-2 focus:ring-purple-500/40 disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            <option value="">Browser read-aloud</option>
+                            <option value="">Sweetdreams Calm browser voice</option>
                             {familyVoices.map(voice => (
                               <option key={voice.id} value={voice.id}>
                                 Family voice: {voice.name}{voice.requiresVerification ? " (verification needed)" : ""}
@@ -1443,7 +1446,7 @@ export default function App() {
                         <p className="mt-2 text-xs text-purple-200/40">
                           {selectedFamilyVoice
                             ? "Family voices use provider-generated audio for a more personal bedtime feel."
-                            : "Uses a slower pace and soft pauses for bedtime."}
+                            : "Sweetdreams Calm uses a slower, softer voice profile with longer pauses for sleep."}
                         </p>
                       </div>
 

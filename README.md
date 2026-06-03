@@ -7,6 +7,7 @@ A local-first bedtime story app for creating gentle story ideas, generating full
 - Personalized story profile with child name, age range, comfort focus, and favorite companion.
 - Wind-down routine presets for sleepy reset, big feelings, and brave-in-the-dark nights.
 - Manual voice, narration pace, background music, and sleep timer controls.
+- Sweetdreams Calm, a softer default browser narration profile tuned for kids falling asleep.
 - Optional Family Voice Studio for consent-based voice recording, cloning, and personalized story narration.
 
 ## Run Locally
