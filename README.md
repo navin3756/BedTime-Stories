@@ -1,20 +1,23 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Sweetdreams Bedtime Stories
 
-# Run and deploy your AI Studio app
-
-This contains everything you need to run your app locally.
-
-View your app in AI Studio: https://ai.studio/apps/b8c3e8ba-7fc9-4594-a4c4-732eff423484
+A local-first bedtime story app for creating gentle story ideas, generating full stories with Ollama, saving recent stories, and reading them aloud in the browser.
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
-
+**Prerequisites:** Node.js and Ollama.
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+2. Install a local model:
+   `ollama pull llama3.2:1b`
+3. Start the app:
    `npm run dev`
+
+By default the app calls Ollama at `http://127.0.0.1:11434` and uses the first installed model. You can override that with `.env.local`:
+
+```env
+OLLAMA_URL="http://127.0.0.1:11434"
+OLLAMA_MODEL="llama3.2:1b"
+```
+
+If Ollama is not running or no model is installed, the app still works with its built-in story generator.

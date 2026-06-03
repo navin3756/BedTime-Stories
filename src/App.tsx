@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, Moon, Sun, Play, Pause, RotateCcw, ArrowLeft, Loader2, Volume2, Music, CloudRain, Trees, Stars, ChevronDown, Mic, MicOff } from 'lucide-react';
-import { generateStoryOptions, generateFullStoryStream, generateStoryAudio, StoryOption } from './services/gemini';
+import { Sparkles, Moon, Play, Pause, RotateCcw, ArrowLeft, Loader2, Volume2, Music, CloudRain, Trees, Stars, ChevronDown, Mic, MicOff, BookOpen, Trash2 } from 'lucide-react';
+import { generateStoryOptions, generateFullStoryStream, generateStoryAudio, getLocalLlmLabel, isCloudStoryProviderConfigured, StoryOption, StoryPreferences } from './services/storyEngine';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -10,64 +10,237 @@ function cn(...inputs: ClassValue[]) {
 }
 
 const BG_MUSIC_TRACKS = [
-  { id: 'lullaby', name: 'Lullaby', url: 'https://cdn.pixabay.com/audio/2022/01/21/audio_31743c5888.mp3', icon: Moon },
-  { id: 'rain', name: 'Soft Rain', url: 'https://cdn.pixabay.com/audio/2021/09/06/audio_830364f9a8.mp3', icon: CloudRain },
-  { id: 'forest', name: 'Forest', url: 'https://cdn.pixabay.com/audio/2022/03/10/audio_c361667631.mp3', icon: Trees },
-  { id: 'space', name: 'Deep Space', url: 'https://cdn.pixabay.com/audio/2021/11/25/audio_91b32e02f9.mp3', icon: Stars },
+  { id: 'lullaby', name: 'Lullaby', frequencies: [220, 330, 440], noise: false, icon: Moon },
+  { id: 'rain', name: 'Soft Rain', frequencies: [174, 261], noise: true, icon: CloudRain },
+  { id: 'forest', name: 'Forest', frequencies: [196, 392], noise: true, icon: Trees },
+  { id: 'space', name: 'Deep Space', frequencies: [110, 220, 330], noise: false, icon: Stars },
 ];
+
+type MusicTrack = typeof BG_MUSIC_TRACKS[number];
+
+interface AmbientPlayer {
+  context: AudioContext;
+  gain: GainNode;
+  oscillators: OscillatorNode[];
+  noise?: AudioBufferSourceNode;
+  stop: () => void;
+}
+
+const STORY_LIBRARY_KEY = 'sweetdreams.savedStories';
+
+const DEFAULT_PREFERENCES: StoryPreferences = {
+  childName: '',
+  ageRange: '4-6',
+  mood: 'gentle and magical',
+  length: 'short - about 3 minutes',
+};
+
+const AGE_RANGES = ['2-3', '4-6', '7-9'];
+const STORY_MOODS = ['gentle and magical', 'funny and cozy', 'brave and reassuring'];
+const STORY_LENGTHS = ['tiny - about 1 minute', 'short - about 3 minutes', 'longer - about 5 minutes'];
+
+interface SavedStory {
+  id: string;
+  title: string;
+  text: string;
+  prompt: string;
+  createdAt: string;
+}
 
 export default function App() {
   const [prompt, setPrompt] = useState('');
+  const [preferences, setPreferences] = useState<StoryPreferences>(DEFAULT_PREFERENCES);
   const [loading, setLoading] = useState(false);
   const [audioLoading, setAudioLoading] = useState(false);
+  const [error, setError] = useState('');
   const [options, setOptions] = useState<StoryOption[]>([]);
   const [selectedStory, setSelectedStory] = useState<{ title: string; text: string; audioUrl: string | null } | null>(null);
+  const [savedStories, setSavedStories] = useState<SavedStory[]>([]);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [bgMusicEnabled, setBgMusicEnabled] = useState(true);
+  const [bgMusicEnabled, setBgMusicEnabled] = useState(false);
   const [selectedMusicId, setSelectedMusicId] = useState('lullaby');
   const [showMusicMenu, setShowMusicMenu] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const bgMusicRef = useRef<HTMLAudioElement | null>(null);
+  const ambientRef = useRef<AmbientPlayer | null>(null);
+  const narrationRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   const currentMusic = BG_MUSIC_TRACKS.find(t => t.id === selectedMusicId) || BG_MUSIC_TRACKS[0];
+  const hasCloudProvider = isCloudStoryProviderConfigured();
+  const localLlmLabel = getLocalLlmLabel();
 
-  // Background music control
   useEffect(() => {
-    if (bgMusicRef.current) {
-      bgMusicRef.current.volume = 0.2;
-      if (bgMusicEnabled && !selectedStory) {
-        bgMusicRef.current.play().catch(() => {
-          console.log("Background music auto-play blocked");
-        });
-      } else {
-        bgMusicRef.current.pause();
+    try {
+      const rawStories = window.localStorage.getItem(STORY_LIBRARY_KEY);
+      if (rawStories) {
+        setSavedStories(JSON.parse(rawStories));
       }
+    } catch (error) {
+      console.error("Unable to load saved stories:", error);
     }
-  }, [bgMusicEnabled, selectedStory, selectedMusicId]);
+  }, []);
+
+  const updatePreferences = (key: keyof StoryPreferences, value: string) => {
+    setPreferences(prev => ({ ...prev, [key]: value }));
+  };
+
+  const persistSavedStories = (stories: SavedStory[]) => {
+    setSavedStories(stories);
+    window.localStorage.setItem(STORY_LIBRARY_KEY, JSON.stringify(stories));
+  };
+
+  const stopNarration = () => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    narrationRef.current = null;
+    setIsPlaying(false);
+  };
+
+  const saveStory = (title: string, text: string) => {
+    if (!text.trim()) return;
+
+    const story: SavedStory = {
+      id: `${Date.now()}`,
+      title,
+      text,
+      prompt,
+      createdAt: new Date().toISOString(),
+    };
+
+    persistSavedStories([story, ...savedStories.filter(saved => saved.text !== text)].slice(0, 8));
+  };
+
+  const openSavedStory = (story: SavedStory) => {
+    stopNarration();
+    setError('');
+    setOptions([]);
+    setPrompt(story.prompt);
+    setSelectedStory({ title: story.title, text: story.text, audioUrl: null });
+    setIsPlaying(false);
+  };
+
+  const deleteSavedStory = (storyId: string) => {
+    persistSavedStories(savedStories.filter(story => story.id !== storyId));
+  };
+
+  const stopAmbient = () => {
+    ambientRef.current?.stop();
+    ambientRef.current = null;
+  };
+
+  const startAmbient = (track: MusicTrack) => {
+    stopAmbient();
+
+    const AudioCtor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtor) return;
+
+    const context = new AudioCtor();
+    const gain = context.createGain();
+    gain.gain.value = 0.0001;
+    gain.connect(context.destination);
+    gain.gain.exponentialRampToValueAtTime(0.08, context.currentTime + 1.2);
+
+    const oscillators = track.frequencies.map((frequency, index) => {
+      const oscillator = context.createOscillator();
+      const oscillatorGain = context.createGain();
+      oscillator.type = index === 0 ? 'sine' : 'triangle';
+      oscillator.frequency.value = frequency;
+      oscillatorGain.gain.value = 0.16 / track.frequencies.length;
+      oscillator.connect(oscillatorGain).connect(gain);
+      oscillator.start();
+      return oscillator;
+    });
+
+    let noise: AudioBufferSourceNode | undefined;
+    if (track.noise) {
+      const buffer = context.createBuffer(1, context.sampleRate * 2, context.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let index = 0; index < data.length; index += 1) {
+        data[index] = (Math.random() * 2 - 1) * 0.18;
+      }
+      const filter = context.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = track.id === 'rain' ? 900 : 1400;
+      noise = context.createBufferSource();
+      noise.buffer = buffer;
+      noise.loop = true;
+      noise.connect(filter).connect(gain);
+      noise.start();
+    }
+
+    ambientRef.current = {
+      context,
+      gain,
+      oscillators,
+      noise,
+      stop: () => {
+        gain.gain.setTargetAtTime(0.0001, context.currentTime, 0.2);
+        window.setTimeout(() => {
+          oscillators.forEach(oscillator => oscillator.stop());
+          noise?.stop();
+          context.close();
+        }, 400);
+      },
+    };
+  };
+
+  const toggleBackgroundMusic = () => {
+    if (bgMusicEnabled) {
+      stopAmbient();
+      setBgMusicEnabled(false);
+      return;
+    }
+
+    startAmbient(currentMusic);
+    setBgMusicEnabled(true);
+  };
+
+  const selectMusicTrack = (track: MusicTrack) => {
+    setSelectedMusicId(track.id);
+    setBgMusicEnabled(true);
+    startAmbient(track);
+  };
+
+  useEffect(() => {
+    if (selectedStory) {
+      stopAmbient();
+      setBgMusicEnabled(false);
+    }
+  }, [selectedStory]);
+
+  useEffect(() => () => stopAmbient(), []);
 
   const handleGenerateOptions = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!prompt.trim()) return;
 
     setLoading(true);
+    setError('');
+    setOptions([]);
     try {
-      const storyOptions = await generateStoryOptions(prompt);
+      const storyOptions = await generateStoryOptions(prompt, preferences);
       setOptions(storyOptions);
+      if (storyOptions.length === 0) {
+        setError("No story ideas came back. Try a little more detail in the prompt.");
+      }
     } catch (error) {
       console.error("Error generating options:", error);
+      setError(error instanceof Error ? error.message : "We couldn't create story ideas. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
   const handleSelectStory = async (option: StoryOption) => {
+    stopNarration();
     setLoading(true);
     setSelectedStory({ title: option.title, text: '', audioUrl: null });
     
     let fullText = '';
     try {
-      const stream = generateFullStoryStream(option.title, option.summary);
+      setError('');
+      const stream = generateFullStoryStream(option.title, option.summary, preferences);
       setLoading(false); // Stop main loading as we start streaming text
 
       for await (const chunk of stream) {
@@ -75,19 +248,25 @@ export default function App() {
         setSelectedStory(prev => prev ? { ...prev, text: fullText } : null);
       }
 
+      saveStory(option.title, fullText);
+
       // Once text is complete, start audio generation in background
       setAudioLoading(true);
       const audio = await generateStoryAudio(fullText);
       setSelectedStory(prev => prev ? { ...prev, audioUrl: audio } : null);
-      setIsPlaying(true);
+      setIsPlaying(Boolean(audio));
     } catch (error) {
       console.error("Error generating story:", error);
+      setError(error instanceof Error ? error.message : "The story could not be completed. Please try again.");
     } finally {
+      setLoading(false);
       setAudioLoading(false);
     }
   };
 
   const togglePlay = () => {
+    if (!selectedStory) return;
+
     if (audioRef.current) {
       if (isPlaying) {
         audioRef.current.pause();
@@ -99,8 +278,42 @@ export default function App() {
         });
         setIsPlaying(true);
       }
+      return;
     }
+
+    if (!('speechSynthesis' in window)) {
+      setError("Read aloud is not supported in this browser, but the story is ready to read.");
+      return;
+    }
+
+    if (isPlaying) {
+      window.speechSynthesis.cancel();
+      narrationRef.current = null;
+      setIsPlaying(false);
+      return;
+    }
+
+    const narration = new SpeechSynthesisUtterance(selectedStory.text);
+    narration.rate = 0.86;
+    narration.pitch = 0.96;
+    narration.volume = 0.9;
+    narration.onend = () => setIsPlaying(false);
+    narration.onerror = () => {
+      setIsPlaying(false);
+      setError("Read aloud stopped unexpectedly. You can still read the story on screen.");
+    };
+
+    narrationRef.current = narration;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(narration);
+    setIsPlaying(true);
   };
+
+  useEffect(() => {
+    return () => {
+      window.speechSynthesis?.cancel();
+    }
+  }, []);
 
   // Sync state if audio is paused/played via external means or autoPlay
   useEffect(() => {
@@ -123,10 +336,13 @@ export default function App() {
   }, [selectedStory?.audioUrl]);
 
   const reset = () => {
+    stopNarration();
     setPrompt('');
+    setPreferences(DEFAULT_PREFERENCES);
     setOptions([]);
     setSelectedStory(null);
     setIsPlaying(false);
+    setError('');
   };
 
   const toggleVoiceInput = () => {
@@ -177,13 +393,6 @@ export default function App() {
         <div className="absolute top-[20%] right-[10%] w-[30%] h-[30%] bg-blue-900/10 blur-[100px] rounded-full" />
       </div>
 
-      {/* Background Music */}
-      <audio
-        ref={bgMusicRef}
-        src={currentMusic.url}
-        loop
-      />
-
       {/* Music Control Center */}
       <div className="fixed top-6 right-6 z-50 flex flex-col items-end gap-2">
         <div className="flex items-center gap-2">
@@ -198,10 +407,7 @@ export default function App() {
                 {BG_MUSIC_TRACKS.map((track) => (
                   <button
                     key={track.id}
-                    onClick={() => {
-                      setSelectedMusicId(track.id);
-                      setBgMusicEnabled(true);
-                    }}
+                    onClick={() => selectMusicTrack(track)}
                     className={cn(
                       "p-2 rounded-xl transition-all flex flex-col items-center gap-1 min-w-[60px]",
                       selectedMusicId === track.id 
@@ -233,7 +439,7 @@ export default function App() {
             <div className="w-[1px] bg-white/10 my-1 mx-1" />
 
             <button
-              onClick={() => setBgMusicEnabled(!bgMusicEnabled)}
+              onClick={toggleBackgroundMusic}
               className="p-2 bg-transparent rounded-full hover:bg-white/10 transition-all group"
               title={bgMusicEnabled ? "Mute Background Music" : "Unmute Background Music"}
             >
@@ -278,14 +484,14 @@ export default function App() {
                 </p>
               </div>
 
-              <form onSubmit={handleGenerateOptions} className="w-full max-w-xl relative group">
+              <form onSubmit={handleGenerateOptions} className="w-full max-w-2xl relative group space-y-4">
                 <div className="relative flex items-center">
                   <input
                     type="text"
                     value={prompt}
                     onChange={(e) => setPrompt(e.target.value)}
                     placeholder="A brave kitten exploring the moon..."
-                    className="w-full bg-white/5 border border-white/10 rounded-2xl pl-6 pr-32 py-5 text-lg focus:outline-none focus:ring-2 focus:ring-purple-500/50 transition-all placeholder:text-white/20"
+                    className="w-full bg-white/5 border border-white/10 rounded-2xl pl-6 pr-36 py-5 text-lg focus:outline-none focus:ring-2 focus:ring-purple-500/50 transition-all placeholder:text-white/20"
                   />
                   <div className="absolute right-2 flex items-center gap-2">
                     <button
@@ -310,7 +516,97 @@ export default function App() {
                     </button>
                   </div>
                 </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-left">
+                  <label className="space-y-2">
+                    <span className="text-xs uppercase tracking-[0.18em] text-purple-200/40">Child</span>
+                    <input
+                      type="text"
+                      value={preferences.childName}
+                      onChange={(e) => updatePreferences('childName', e.target.value)}
+                      placeholder="Optional name"
+                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/40 placeholder:text-white/20"
+                    />
+                  </label>
+
+                  <label className="space-y-2">
+                    <span className="text-xs uppercase tracking-[0.18em] text-purple-200/40">Age</span>
+                    <select
+                      value={preferences.ageRange}
+                      onChange={(e) => updatePreferences('ageRange', e.target.value)}
+                      className="w-full bg-[#171126] border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/40"
+                    >
+                      {AGE_RANGES.map(age => <option key={age}>{age}</option>)}
+                    </select>
+                  </label>
+
+                  <label className="space-y-2">
+                    <span className="text-xs uppercase tracking-[0.18em] text-purple-200/40">Mood</span>
+                    <select
+                      value={preferences.mood}
+                      onChange={(e) => updatePreferences('mood', e.target.value)}
+                      className="w-full bg-[#171126] border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/40"
+                    >
+                      {STORY_MOODS.map(mood => <option key={mood}>{mood}</option>)}
+                    </select>
+                  </label>
+
+                  <label className="space-y-2">
+                    <span className="text-xs uppercase tracking-[0.18em] text-purple-200/40">Length</span>
+                    <select
+                      value={preferences.length}
+                      onChange={(e) => updatePreferences('length', e.target.value)}
+                      className="w-full bg-[#171126] border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/40"
+                    >
+                      {STORY_LENGTHS.map(length => <option key={length}>{length}</option>)}
+                    </select>
+                  </label>
+                </div>
               </form>
+
+              {error && (
+                <div className="w-full max-w-2xl rounded-2xl border border-red-400/20 bg-red-500/10 px-5 py-4 text-sm text-red-100">
+                  {error}
+                </div>
+              )}
+
+              {!hasCloudProvider && (
+                <p className="max-w-2xl text-sm text-purple-200/45">
+                  Local mode is on: the app uses {localLlmLabel} through Ollama when a model is installed, then falls back to built-in story generation. Browser read-aloud works without any API key.
+                </p>
+              )}
+
+              {savedStories.length > 0 && (
+                <section className="w-full max-w-3xl text-left space-y-4 pt-4">
+                  <div className="flex items-center gap-2 text-purple-200/70">
+                    <BookOpen className="w-4 h-4" />
+                    <h2 className="text-sm font-semibold uppercase tracking-[0.2em]">Recent Stories</h2>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {savedStories.slice(0, 4).map(story => (
+                      <div key={story.id} className="group flex items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                        <button
+                          type="button"
+                          onClick={() => openSavedStory(story)}
+                          className="flex-1 text-left"
+                        >
+                          <p className="font-serif text-lg text-white">{story.title}</p>
+                          <p className="mt-1 line-clamp-2 text-sm text-purple-200/50">{story.text}</p>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteSavedStory(story.id)}
+                          title="Remove story"
+                          className="rounded-full p-2 text-purple-200/30 opacity-100 transition-colors hover:bg-white/10 hover:text-red-200 md:opacity-0 md:group-hover:opacity-100"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
             </motion.div>
           )}
 
@@ -333,6 +629,12 @@ export default function App() {
                 <h2 className="text-2xl font-serif italic text-white/80">Choose your adventure</h2>
                 <div className="w-16" /> {/* Spacer */}
               </div>
+
+              {error && (
+                <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-5 py-4 text-sm text-red-100">
+                  {error}
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 {options.map((option, index) => (
@@ -382,7 +684,10 @@ export default function App() {
             >
               <div className="flex items-center justify-between">
                 <button 
-                  onClick={() => setSelectedStory(null)}
+                  onClick={() => {
+                    stopNarration();
+                    setSelectedStory(null);
+                  }}
                   className="flex items-center gap-2 text-purple-300/60 hover:text-purple-300 transition-colors"
                 >
                   <ArrowLeft className="w-4 h-4" />
@@ -398,6 +703,12 @@ export default function App() {
                   </button>
                 </div>
               </div>
+
+              {error && (
+                <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-5 py-4 text-sm text-red-100">
+                  {error}
+                </div>
+              )}
 
               <div className="flex-1 bg-white/5 border border-white/10 rounded-[40px] p-8 md:p-12 flex flex-col relative overflow-hidden">
                 {/* Glass Morphism Player Chrome */}
@@ -415,10 +726,15 @@ export default function App() {
                           <Loader2 className="w-4 h-4 animate-spin" />
                           <span className="text-xs uppercase tracking-[0.2em]">Preparing Magical Audio...</span>
                         </>
-                      ) : (
+                      ) : selectedStory.audioUrl ? (
                         <>
                           <Volume2 className="w-4 h-4" />
                           <span className="text-xs uppercase tracking-[0.2em]">Magical Audio Ready</span>
+                        </>
+                      ) : (
+                        <>
+                          <BookOpen className="w-4 h-4" />
+                          <span className="text-xs uppercase tracking-[0.2em]">Browser Read Aloud Ready</span>
                         </>
                       )}
                     </div>
@@ -439,10 +755,12 @@ export default function App() {
                         whileHover={{ scale: 1.1 }}
                         whileTap={{ scale: 0.9 }}
                         onClick={togglePlay}
-                        disabled={!selectedStory.audioUrl}
+                        disabled={!selectedStory.text.trim()}
+                        aria-label={isPlaying ? "Pause story narration" : "Play story narration"}
+                        title={isPlaying ? "Pause story narration" : "Play story narration"}
                         className={cn(
                           "w-20 h-20 rounded-full flex items-center justify-center shadow-2xl transition-all",
-                          selectedStory.audioUrl 
+                          selectedStory.text.trim()
                             ? "bg-purple-600 hover:bg-purple-500 shadow-purple-900/40" 
                             : "bg-purple-900/30 cursor-not-allowed opacity-50"
                         )}
