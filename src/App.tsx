@@ -26,6 +26,14 @@ interface AmbientPlayer {
   stop: () => void;
 }
 
+interface NarrationPreset {
+  id: string;
+  name: string;
+  rate: number;
+  pitch: number;
+  pauseMs: number;
+}
+
 const STORY_LIBRARY_KEY = 'sweetdreams.savedStories';
 
 const DEFAULT_PREFERENCES: StoryPreferences = {
@@ -38,6 +46,37 @@ const DEFAULT_PREFERENCES: StoryPreferences = {
 const AGE_RANGES = ['2-3', '4-6', '7-9'];
 const STORY_MOODS = ['gentle and magical', 'funny and cozy', 'brave and reassuring'];
 const STORY_LENGTHS = ['tiny - about 1 minute', 'short - about 3 minutes', 'longer - about 5 minutes'];
+const NARRATION_PRESETS: NarrationPreset[] = [
+  { id: 'bedtime', name: 'Bedtime soft', rate: 0.72, pitch: 0.86, pauseMs: 620 },
+  { id: 'gentle', name: 'Gentle storyteller', rate: 0.82, pitch: 0.94, pauseMs: 420 },
+  { id: 'whisper', name: 'Very slow calm', rate: 0.62, pitch: 0.78, pauseMs: 780 },
+];
+
+function voiceScore(voice: SpeechSynthesisVoice): number {
+  const name = voice.name.toLowerCase();
+  let score = voice.default ? 4 : 0;
+
+  if (voice.lang.toLowerCase().startsWith('en')) score += 8;
+  if (name.includes('zira') || name.includes('samantha') || name.includes('aria') || name.includes('jenny')) score += 12;
+  if (name.includes('susan') || name.includes('sonia') || name.includes('serena') || name.includes('ava')) score += 10;
+  if (name.includes('female') || name.includes('natural') || name.includes('neural')) score += 8;
+  if (name.includes('google uk english female')) score += 12;
+  if (name.includes('david') || name.includes('mark') || name.includes('male')) score -= 5;
+
+  return score;
+}
+
+function sortVoicesForBedtime(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice[] {
+  return [...voices].sort((a, b) => voiceScore(b) - voiceScore(a) || a.name.localeCompare(b.name));
+}
+
+function splitNarrationText(text: string): string[] {
+  return text
+    .split(/\n+/)
+    .flatMap(paragraph => paragraph.match(/[^.!?]+[.!?"]*/g) || [paragraph])
+    .map(segment => segment.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+}
 
 interface SavedStory {
   id: string;
@@ -61,13 +100,16 @@ export default function App() {
   const [selectedMusicId, setSelectedMusicId] = useState('lullaby');
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoiceURI, setSelectedVoiceURI] = useState('');
+  const [selectedNarrationPresetId, setSelectedNarrationPresetId] = useState('bedtime');
   const [isListening, setIsListening] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const ambientRef = useRef<AmbientPlayer | null>(null);
   const narrationRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const narrationTimeoutRef = useRef<number | null>(null);
 
   const currentMusic = BG_MUSIC_TRACKS.find(t => t.id === selectedMusicId) || BG_MUSIC_TRACKS[0];
   const selectedVoice = availableVoices.find(voice => voice.voiceURI === selectedVoiceURI) || null;
+  const selectedNarrationPreset = NARRATION_PRESETS.find(preset => preset.id === selectedNarrationPresetId) || NARRATION_PRESETS[0];
   const hasCloudProvider = isCloudStoryProviderConfigured();
   const localLlmLabel = getLocalLlmLabel();
 
@@ -86,9 +128,9 @@ export default function App() {
     if (!('speechSynthesis' in window)) return;
 
     const loadVoices = () => {
-      const voices = window.speechSynthesis.getVoices();
+      const voices = sortVoicesForBedtime(window.speechSynthesis.getVoices());
       setAvailableVoices(voices);
-      setSelectedVoiceURI(prev => prev || voices.find(voice => voice.default)?.voiceURI || voices[0]?.voiceURI || '');
+      setSelectedVoiceURI(prev => prev || voices[0]?.voiceURI || '');
     };
 
     loadVoices();
@@ -106,6 +148,10 @@ export default function App() {
   };
 
   const stopNarration = () => {
+    if (narrationTimeoutRef.current) {
+      window.clearTimeout(narrationTimeoutRef.current);
+      narrationTimeoutRef.current = null;
+    }
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
@@ -224,6 +270,11 @@ export default function App() {
     setSelectedVoiceURI(voiceURI);
   };
 
+  const handleNarrationPresetChange = (presetId: string) => {
+    stopNarration();
+    setSelectedNarrationPresetId(presetId);
+  };
+
   useEffect(() => () => stopAmbient(), []);
 
   const handleGenerateOptions = async (e: React.FormEvent) => {
@@ -308,23 +359,44 @@ export default function App() {
       return;
     }
 
-    const narration = new SpeechSynthesisUtterance(selectedStory.text);
-    if (selectedVoice) {
-      narration.voice = selectedVoice;
-    }
-    narration.rate = 0.86;
-    narration.pitch = 0.96;
-    narration.volume = 0.9;
-    narration.onend = () => setIsPlaying(false);
-    narration.onerror = () => {
-      setIsPlaying(false);
-      setError("Read aloud stopped unexpectedly. You can still read the story on screen.");
+    window.speechSynthesis.cancel();
+    setIsPlaying(true);
+
+    const segments = splitNarrationText(selectedStory.text);
+    let index = 0;
+
+    const speakNext = () => {
+      const segment = segments[index];
+      if (!segment) {
+        narrationRef.current = null;
+        narrationTimeoutRef.current = null;
+        setIsPlaying(false);
+        return;
+      }
+
+      const narration = new SpeechSynthesisUtterance(segment);
+      if (selectedVoice) {
+        narration.voice = selectedVoice;
+      }
+      narration.rate = selectedNarrationPreset.rate;
+      narration.pitch = selectedNarrationPreset.pitch;
+      narration.volume = 0.92;
+      narration.onend = () => {
+        index += 1;
+        narrationTimeoutRef.current = window.setTimeout(speakNext, selectedNarrationPreset.pauseMs);
+      };
+      narration.onerror = () => {
+        narrationRef.current = null;
+        narrationTimeoutRef.current = null;
+        setIsPlaying(false);
+        setError("Read aloud stopped unexpectedly. Try another voice, or read the story on screen.");
+      };
+
+      narrationRef.current = narration;
+      window.speechSynthesis.speak(narration);
     };
 
-    narrationRef.current = narration;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(narration);
-    setIsPlaying(true);
+    speakNext();
   };
 
   useEffect(() => {
@@ -709,24 +781,37 @@ export default function App() {
                           <Volume2 className="h-4 w-4" />
                           <h3 className="text-xs font-semibold uppercase tracking-[0.18em]">Story Voice</h3>
                         </div>
-                        <select
-                          value={selectedVoiceURI}
-                          onChange={(e) => handleVoiceChange(e.target.value)}
-                          disabled={!availableVoices.length || isPlaying}
-                          className="w-full rounded-xl border border-white/10 bg-[#171126] px-4 py-3 text-sm text-purple-50 focus:outline-none focus:ring-2 focus:ring-purple-500/40 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {availableVoices.length ? (
-                            availableVoices.map(voice => (
-                              <option key={voice.voiceURI} value={voice.voiceURI}>
-                                {voice.name} {voice.lang ? `(${voice.lang})` : ''}
-                              </option>
-                            ))
-                          ) : (
-                            <option>Default browser voice</option>
-                          )}
-                        </select>
+                        <div className="space-y-3">
+                          <select
+                            value={selectedVoiceURI}
+                            onChange={(e) => handleVoiceChange(e.target.value)}
+                            disabled={!availableVoices.length || isPlaying}
+                            className="w-full rounded-xl border border-white/10 bg-[#171126] px-4 py-3 text-sm text-purple-50 focus:outline-none focus:ring-2 focus:ring-purple-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {availableVoices.length ? (
+                              availableVoices.map((voice, index) => (
+                                <option key={voice.voiceURI} value={voice.voiceURI}>
+                                  {index === 0 ? 'Recommended: ' : ''}{voice.name} {voice.lang ? `(${voice.lang})` : ''}
+                                </option>
+                              ))
+                            ) : (
+                              <option>Default browser voice</option>
+                            )}
+                          </select>
+
+                          <select
+                            value={selectedNarrationPresetId}
+                            onChange={(e) => handleNarrationPresetChange(e.target.value)}
+                            disabled={isPlaying}
+                            className="w-full rounded-xl border border-white/10 bg-[#171126] px-4 py-3 text-sm text-purple-50 focus:outline-none focus:ring-2 focus:ring-purple-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {NARRATION_PRESETS.map(preset => (
+                              <option key={preset.id} value={preset.id}>{preset.name}</option>
+                            ))}
+                          </select>
+                        </div>
                         <p className="mt-2 text-xs text-purple-200/40">
-                          Choose a voice before pressing play.
+                          Uses a slower pace and soft pauses for bedtime.
                         </p>
                       </div>
 
