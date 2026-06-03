@@ -39,6 +39,9 @@ const STORY_LIBRARY_KEY = 'sweetdreams.savedStories';
 const STORY_PROFILE_KEY = 'sweetdreams.storyProfile';
 const FAMILY_VOICES_KEY = 'sweetdreams.familyVoices';
 const MAX_BROWSER_NARRATION_CHARS = 180;
+const ANDROID_SPEECH_MIN_RATE = 0.72;
+const ANDROID_SPEECH_MIN_PITCH = 0.84;
+const SPEECH_KEEP_ALIVE_MS = 7000;
 
 const VOICE_SAMPLE_PARAGRAPH = `I confirm this is my own voice, and I want Sweetdreams to create a private bedtime voice for my family. Tonight, take a slow breath with me. You are safe, you are loved, and this story is here to help you rest.`;
 
@@ -116,6 +119,21 @@ function voiceScore(voice: SpeechSynthesisVoice): number {
 
 function sortVoicesForBedtime(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice[] {
   return [...voices].sort((a, b) => voiceScore(b) - voiceScore(a) || a.name.localeCompare(b.name));
+}
+
+function isAndroidSpeechRuntime(): boolean {
+  return /Android/i.test(window.navigator.userAgent);
+}
+
+function getBrowserNarrationSettings(preset: NarrationPreset): NarrationPreset {
+  if (!isAndroidSpeechRuntime()) return preset;
+
+  return {
+    ...preset,
+    rate: Math.max(preset.rate, ANDROID_SPEECH_MIN_RATE),
+    pitch: Math.max(preset.pitch, ANDROID_SPEECH_MIN_PITCH),
+    pauseMs: Math.max(preset.pauseMs, 850),
+  };
 }
 
 function splitNarrationText(text: string): string[] {
@@ -207,6 +225,7 @@ export default function App() {
   const ambientRef = useRef<AmbientPlayer | null>(null);
   const narrationRef = useRef<SpeechSynthesisUtterance | null>(null);
   const narrationTimeoutRef = useRef<number | null>(null);
+  const narrationKeepAliveRef = useRef<number | null>(null);
   const narrationSessionRef = useRef(0);
   const narrationStopRequestedRef = useRef(false);
   const voiceMediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -403,9 +422,17 @@ export default function App() {
     }
   };
 
-  const stopNarration = () => {
+  const clearNarrationKeepAlive = () => {
+    if (narrationKeepAliveRef.current) {
+      window.clearInterval(narrationKeepAliveRef.current);
+      narrationKeepAliveRef.current = null;
+    }
+  };
+
+  const stopNarration = (advanceSession = true) => {
     narrationStopRequestedRef.current = true;
-    narrationSessionRef.current += 1;
+    if (advanceSession) narrationSessionRef.current += 1;
+    clearNarrationKeepAlive();
     if (narrationTimeoutRef.current) {
       window.clearTimeout(narrationTimeoutRef.current);
       narrationTimeoutRef.current = null;
@@ -747,36 +774,67 @@ export default function App() {
 
     const segments = splitNarrationText(selectedStory.text);
     let index = 0;
+    const narrationSettings = getBrowserNarrationSettings(selectedNarrationPreset);
+    const shouldUseAndroidFallback = isAndroidSpeechRuntime();
 
-    const speakNext = () => {
+    clearNarrationKeepAlive();
+    narrationKeepAliveRef.current = window.setInterval(() => {
+      if (
+        narrationStopRequestedRef.current ||
+        narrationSessionId !== narrationSessionRef.current ||
+        !('speechSynthesis' in window)
+      ) {
+        clearNarrationKeepAlive();
+        return;
+      }
+
+      if (window.speechSynthesis.speaking && window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
+    }, SPEECH_KEEP_ALIVE_MS);
+
+    const finishNarration = () => {
+      clearNarrationKeepAlive();
+      narrationRef.current = null;
+      narrationTimeoutRef.current = null;
+      setIsPlaying(false);
+    };
+
+    const failNarration = (message: string) => {
+      clearNarrationKeepAlive();
+      narrationRef.current = null;
+      narrationTimeoutRef.current = null;
+      setIsPlaying(false);
+      setError(message);
+    };
+
+    const speakNext = (useDefaultVoice = false, retryCount = 0) => {
       if (narrationStopRequestedRef.current || narrationSessionId !== narrationSessionRef.current) {
         return;
       }
 
       const segment = segments[index];
       if (!segment) {
-        narrationRef.current = null;
-        narrationTimeoutRef.current = null;
-        setIsPlaying(false);
+        finishNarration();
         return;
       }
 
       const narration = new SpeechSynthesisUtterance(segment);
-      if (selectedVoice) {
+      if (selectedVoice && !useDefaultVoice) {
         narration.voice = selectedVoice;
         narration.lang = selectedVoice.lang;
       } else {
         narration.lang = 'en-US';
       }
-      narration.rate = selectedNarrationPreset.rate;
-      narration.pitch = selectedNarrationPreset.pitch;
-      narration.volume = selectedNarrationPreset.volume;
+      narration.rate = narrationSettings.rate;
+      narration.pitch = narrationSettings.pitch;
+      narration.volume = narrationSettings.volume;
       narration.onend = () => {
         if (narrationStopRequestedRef.current || narrationSessionId !== narrationSessionRef.current) {
           return;
         }
         index += 1;
-        narrationTimeoutRef.current = window.setTimeout(speakNext, selectedNarrationPreset.pauseMs);
+        narrationTimeoutRef.current = window.setTimeout(() => speakNext(false, 0), narrationSettings.pauseMs);
       };
       narration.onerror = (event) => {
         if (
@@ -788,13 +846,24 @@ export default function App() {
           return;
         }
 
-        narrationRef.current = null;
-        narrationTimeoutRef.current = null;
-        setIsPlaying(false);
-        setError("This browser voice could not finish the read-aloud. Try another voice, or use a family cloned voice when configured.");
+        console.warn("Browser read-aloud error:", event.error);
+
+        if (shouldUseAndroidFallback && retryCount < 1) {
+          narrationRef.current = null;
+          if ('speechSynthesis' in window) {
+            window.speechSynthesis.cancel();
+          }
+          narrationTimeoutRef.current = window.setTimeout(() => speakNext(true, retryCount + 1), 250);
+          return;
+        }
+
+        failNarration("Read aloud stopped unexpectedly. Try another voice, or read the story on screen.");
       };
 
       narrationRef.current = narration;
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
       window.speechSynthesis.speak(narration);
     };
 
