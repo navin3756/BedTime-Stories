@@ -9,6 +9,8 @@ export interface StoryPreferences {
   ageRange: string;
   mood: string;
   length: string;
+  comfortFocus: string;
+  companion: string;
 }
 
 interface OllamaModel {
@@ -83,11 +85,14 @@ async function getOllamaModel(): Promise<string | null> {
 
 function preferenceContext(preferences: StoryPreferences): string {
   const childName = preferences.childName.trim();
+  const companion = preferences.companion.trim();
   return [
     childName ? `The child's name is ${childName}.` : "",
     `Target age range: ${preferences.ageRange}.`,
     `Story mood: ${preferences.mood}.`,
     `Desired length: ${preferences.length}.`,
+    `Bedtime focus: ${preferences.comfortFocus}.`,
+    companion ? `Include this favorite companion as a gentle helper: ${companion}.` : "",
   ].filter(Boolean).join(" ");
 }
 
@@ -112,31 +117,35 @@ function localStoryOptions(prompt: string, preferences: StoryPreferences): Story
   const sentenceChild = sentenceStartChildReference(preferences);
   const titleChild = titleChildReference(preferences);
   const gentleMood = preferences.mood.split(" and ")[0] || "gentle";
+  const companion = preferences.companion.trim() || "a tiny lantern friend";
+  const focus = preferences.comfortFocus || "falling asleep peacefully";
 
   return [
     {
       id: "local-moon-path",
       title: `The Moonlit Path of ${titleChild}`,
-      summary: `${sentenceChild} follows a silver trail through a ${gentleMood} world inspired by ${idea}, meeting kind helpers and finding a cozy way home.`,
+      summary: `${sentenceChild} follows a silver trail through a ${gentleMood} world inspired by ${idea}, with ${companion} helping them practice ${focus}.`,
     },
     {
       id: "local-pocket-star",
       title: "The Pocket-Sized Star",
-      summary: `A tiny star asks for help with ${idea}, leading to a quiet adventure full of soft jokes, warm lights, and a sleepy goodnight.`,
+      summary: `A tiny star asks for help with ${idea}, leading to a quiet adventure with ${companion}, warm lights, and a sleepy goodnight about ${focus}.`,
     },
     {
       id: "local-cloud-library",
       title: "The Cloud Library",
-      summary: `${sentenceChild} visits a floating library where every cloud whispers a peaceful chapter about ${idea} before the sky tucks itself in.`,
+      summary: `${sentenceChild} visits a floating library where every cloud whispers a peaceful chapter about ${idea}, ${focus}, and feeling safe.`,
     },
   ];
 }
 
 function localStoryText(title: string, summary: string, preferences: StoryPreferences): string {
   const child = childReference(preferences);
+  const companion = preferences.companion.trim() || "a small glowing friend";
+  const focus = preferences.comfortFocus || "falling asleep peacefully";
   const lengthHint = preferences.length.startsWith("tiny") ? "tiny" : preferences.length.startsWith("longer") ? "longer" : "short";
   const extraMoment = lengthHint === "longer"
-    ? `\n\nThey paused beside a little lantern pond, where each ripple showed a happy memory from the day. ${child} chose the calmest one and tucked it carefully into an imaginary pocket for tomorrow.`
+    ? `\n\nThey paused beside a little lantern pond, where each ripple showed a happy memory from the day. ${companion} helped ${child} choose the calmest one and tuck it carefully into an imaginary pocket for tomorrow.`
     : "";
 
   return `${title}
@@ -145,9 +154,9 @@ Once, when the room was quiet and the stars were just beginning to blink, ${chil
 
 The door was made of soft moonlight and opened with a whisper. On the other side was a gentle place where ${summary.charAt(0).toLowerCase()}${summary.slice(1)}
 
-Every step felt safe. Every sound was kind. A sleepy breeze carried the smell of warm blankets, and the path glowed just enough to show the way. When ${child} felt unsure, a small friendly light floated close and hummed, "You are exactly where you need to be."
+Every step felt safe. Every sound was kind. A sleepy breeze carried the smell of warm blankets, and the path glowed just enough to show the way. When ${child} felt unsure, ${companion} floated close and hummed, "You are exactly where you need to be."
 
-Together, they wandered past pillow hills, silver leaves, and windows full of cozy dreams. The world did not rush them. It waited patiently, as all good bedtime worlds do.${extraMoment}
+Together, they wandered past pillow hills, silver leaves, and windows full of cozy dreams. The world did not rush them. It waited patiently, as all good bedtime worlds do. Each quiet step made ${focus} feel a little easier.${extraMoment}
 
 At last, the moon lowered a ladder of light back home. ${child} climbed down slowly, carrying a peaceful feeling in both hands.
 
@@ -194,7 +203,7 @@ Title: ${title}
 Story idea: ${summary}
 ${preferenceContext(preferences)}
 
-Keep it gentle, imaginative, reassuring, and easy to read aloud. Do not include scary conflict. End with calm sleep.`,
+Keep it gentle, imaginative, reassuring, and easy to read aloud. Do not include scary conflict. Build in one small calming moment, such as slow breathing, body relaxation, or a safety affirmation. End with calm sleep.`,
         options: {
           temperature: 0.75,
           top_p: 0.9,

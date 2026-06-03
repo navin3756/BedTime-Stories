@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, Moon, Play, Pause, RotateCcw, ArrowLeft, Loader2, Volume2, Music, CloudRain, Trees, Stars, Mic, MicOff, BookOpen, Trash2 } from 'lucide-react';
+import { Sparkles, Moon, Play, Pause, RotateCcw, ArrowLeft, Loader2, Volume2, Music, CloudRain, Trees, Stars, Mic, MicOff, BookOpen, Trash2, Timer, Heart, CheckCircle2, Circle, Wind } from 'lucide-react';
 import { generateStoryOptions, generateFullStoryStream, generateStoryAudio, getLocalLlmLabel, isCloudStoryProviderConfigured, StoryOption, StoryPreferences } from './services/storyEngine';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -35,21 +35,62 @@ interface NarrationPreset {
 }
 
 const STORY_LIBRARY_KEY = 'sweetdreams.savedStories';
+const STORY_PROFILE_KEY = 'sweetdreams.storyProfile';
 
 const DEFAULT_PREFERENCES: StoryPreferences = {
   childName: '',
   ageRange: '4-6',
   mood: 'gentle and magical',
   length: 'short - about 3 minutes',
+  comfortFocus: 'falling asleep peacefully',
+  companion: '',
 };
 
 const AGE_RANGES = ['2-3', '4-6', '7-9'];
 const STORY_MOODS = ['gentle and magical', 'funny and cozy', 'brave and reassuring'];
 const STORY_LENGTHS = ['tiny - about 1 minute', 'short - about 3 minutes', 'longer - about 5 minutes'];
+const COMFORT_FOCUSES = ['falling asleep peacefully', 'feeling brave in the dark', 'letting go of big feelings', 'kindness and gratitude', 'curiosity with calm'];
+const SLEEP_TIMER_OPTIONS = [
+  { minutes: 0, label: 'Timer off' },
+  { minutes: 5, label: '5 min' },
+  { minutes: 10, label: '10 min' },
+  { minutes: 20, label: '20 min' },
+  { minutes: 30, label: '30 min' },
+];
 const NARRATION_PRESETS: NarrationPreset[] = [
   { id: 'bedtime', name: 'Bedtime soft', rate: 0.72, pitch: 0.86, pauseMs: 620 },
   { id: 'gentle', name: 'Gentle storyteller', rate: 0.82, pitch: 0.94, pauseMs: 420 },
   { id: 'whisper', name: 'Very slow calm', rate: 0.62, pitch: 0.78, pauseMs: 780 },
+];
+
+const ROUTINE_PRESETS = [
+  {
+    id: 'sleepy-reset',
+    name: 'Sleepy reset',
+    description: 'A short breath, a gentle story, then quiet sound.',
+    prompt: 'a safe moon garden with a glowing path home',
+    mood: 'gentle and magical',
+    comfortFocus: 'falling asleep peacefully',
+    length: 'short - about 3 minutes',
+  },
+  {
+    id: 'big-feelings',
+    name: 'Big feelings',
+    description: 'For nights when the day felt loud or emotional.',
+    prompt: 'a cloud library where worries become soft stars',
+    mood: 'brave and reassuring',
+    comfortFocus: 'letting go of big feelings',
+    length: 'short - about 3 minutes',
+  },
+  {
+    id: 'brave-dark',
+    name: 'Brave in the dark',
+    description: 'A cozy confidence story for lights-out nerves.',
+    prompt: 'a tiny lantern helping a child explore a friendly night sky',
+    mood: 'brave and reassuring',
+    comfortFocus: 'feeling brave in the dark',
+    length: 'tiny - about 1 minute',
+  },
 ];
 
 function voiceScore(voice: SpeechSynthesisVoice): number {
@@ -78,6 +119,13 @@ function splitNarrationText(text: string): string[] {
     .filter(Boolean);
 }
 
+function formatTimer(seconds: number): string {
+  const safeSeconds = Math.max(0, seconds);
+  const minutes = Math.floor(safeSeconds / 60).toString().padStart(2, '0');
+  const remainingSeconds = Math.floor(safeSeconds % 60).toString().padStart(2, '0');
+  return `${minutes}:${remainingSeconds}`;
+}
+
 interface SavedStory {
   id: string;
   title: string;
@@ -101,15 +149,25 @@ export default function App() {
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoiceURI, setSelectedVoiceURI] = useState('');
   const [selectedNarrationPresetId, setSelectedNarrationPresetId] = useState('bedtime');
+  const [sleepTimerMinutes, setSleepTimerMinutes] = useState(0);
+  const [sleepTimerRemaining, setSleepTimerRemaining] = useState(0);
+  const [selectedRoutineId, setSelectedRoutineId] = useState('sleepy-reset');
+  const [routineSteps, setRoutineSteps] = useState<string[]>([]);
+  const [breathingActive, setBreathingActive] = useState(false);
+  const [breathingRemaining, setBreathingRemaining] = useState(60);
   const [isListening, setIsListening] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const ambientRef = useRef<AmbientPlayer | null>(null);
   const narrationRef = useRef<SpeechSynthesisUtterance | null>(null);
   const narrationTimeoutRef = useRef<number | null>(null);
+  const sleepTimerIntervalRef = useRef<number | null>(null);
+  const sleepTimerEndRef = useRef<number | null>(null);
+  const breathingIntervalRef = useRef<number | null>(null);
 
   const currentMusic = BG_MUSIC_TRACKS.find(t => t.id === selectedMusicId) || BG_MUSIC_TRACKS[0];
   const selectedVoice = availableVoices.find(voice => voice.voiceURI === selectedVoiceURI) || null;
   const selectedNarrationPreset = NARRATION_PRESETS.find(preset => preset.id === selectedNarrationPresetId) || NARRATION_PRESETS[0];
+  const selectedRoutine = ROUTINE_PRESETS.find(routine => routine.id === selectedRoutineId) || ROUTINE_PRESETS[0];
   const hasCloudProvider = isCloudStoryProviderConfigured();
   const localLlmLabel = getLocalLlmLabel();
 
@@ -119,10 +177,25 @@ export default function App() {
       if (rawStories) {
         setSavedStories(JSON.parse(rawStories));
       }
+
+      const rawProfile = window.localStorage.getItem(STORY_PROFILE_KEY);
+      if (rawProfile) {
+        const profile = JSON.parse(rawProfile) as Partial<StoryPreferences> & { routineId?: string };
+        setPreferences(prev => ({ ...prev, ...profile }));
+        if (profile.routineId) setSelectedRoutineId(profile.routineId);
+      }
     } catch (error) {
-      console.error("Unable to load saved stories:", error);
+      console.error("Unable to load saved bedtime settings:", error);
     }
   }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(STORY_PROFILE_KEY, JSON.stringify({ ...preferences, routineId: selectedRoutineId }));
+    } catch (error) {
+      console.error("Unable to save bedtime settings:", error);
+    }
+  }, [preferences, selectedRoutineId]);
 
   useEffect(() => {
     if (!('speechSynthesis' in window)) return;
@@ -157,6 +230,81 @@ export default function App() {
     }
     narrationRef.current = null;
     setIsPlaying(false);
+  };
+
+  const clearSleepTimer = () => {
+    if (sleepTimerIntervalRef.current) {
+      window.clearInterval(sleepTimerIntervalRef.current);
+      sleepTimerIntervalRef.current = null;
+    }
+    sleepTimerEndRef.current = null;
+    setSleepTimerRemaining(0);
+  };
+
+  const startSleepTimerIfNeeded = () => {
+    if (!sleepTimerMinutes) return;
+
+    if (sleepTimerIntervalRef.current) {
+      window.clearInterval(sleepTimerIntervalRef.current);
+    }
+
+    const endAt = Date.now() + sleepTimerMinutes * 60 * 1000;
+    sleepTimerEndRef.current = endAt;
+    setSleepTimerRemaining(Math.ceil((endAt - Date.now()) / 1000));
+
+    sleepTimerIntervalRef.current = window.setInterval(() => {
+      const remaining = sleepTimerEndRef.current ? Math.ceil((sleepTimerEndRef.current - Date.now()) / 1000) : 0;
+      setSleepTimerRemaining(Math.max(0, remaining));
+
+      if (remaining <= 0) {
+        clearSleepTimer();
+        stopNarration();
+        audioRef.current?.pause();
+        stopAmbient();
+        setBgMusicEnabled(false);
+      }
+    }, 1000);
+  };
+
+  const completeRoutineStep = (step: string) => {
+    setRoutineSteps(prev => prev.includes(step) ? prev : [...prev, step]);
+  };
+
+  const applyRoutine = (routineId: string) => {
+    const routine = ROUTINE_PRESETS.find(item => item.id === routineId) || ROUTINE_PRESETS[0];
+    setSelectedRoutineId(routine.id);
+    setPrompt(routine.prompt);
+    setRoutineSteps([]);
+    setPreferences(prev => ({
+      ...prev,
+      mood: routine.mood,
+      comfortFocus: routine.comfortFocus,
+      length: routine.length,
+    }));
+  };
+
+  const stopBreathing = () => {
+    if (breathingIntervalRef.current) {
+      window.clearInterval(breathingIntervalRef.current);
+      breathingIntervalRef.current = null;
+    }
+    setBreathingActive(false);
+  };
+
+  const startBreathing = () => {
+    stopBreathing();
+    setBreathingRemaining(60);
+    setBreathingActive(true);
+    breathingIntervalRef.current = window.setInterval(() => {
+      setBreathingRemaining(prev => {
+        if (prev <= 1) {
+          stopBreathing();
+          completeRoutineStep('breathe');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
   };
 
   const saveStory = (title: string, text: string) => {
@@ -256,6 +404,8 @@ export default function App() {
 
     startAmbient(currentMusic);
     setBgMusicEnabled(true);
+    completeRoutineStep('drift');
+    startSleepTimerIfNeeded();
   };
 
   const selectMusicTrack = (track: MusicTrack) => {
@@ -275,7 +425,15 @@ export default function App() {
     setSelectedNarrationPresetId(presetId);
   };
 
-  useEffect(() => () => stopAmbient(), []);
+  useEffect(() => () => {
+    stopAmbient();
+    clearSleepTimer();
+    stopBreathing();
+  }, []);
+
+  useEffect(() => {
+    if (!sleepTimerMinutes) clearSleepTimer();
+  }, [sleepTimerMinutes]);
 
   const handleGenerateOptions = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -315,6 +473,7 @@ export default function App() {
       }
 
       saveStory(option.title, fullText);
+      completeRoutineStep('story');
 
       // Once text is complete, start audio generation in background
       setAudioLoading(true);
@@ -343,6 +502,8 @@ export default function App() {
           setIsPlaying(false);
         });
         setIsPlaying(true);
+        completeRoutineStep('story');
+        startSleepTimerIfNeeded();
       }
       return;
     }
@@ -353,14 +514,14 @@ export default function App() {
     }
 
     if (isPlaying) {
-      window.speechSynthesis.cancel();
-      narrationRef.current = null;
-      setIsPlaying(false);
+      stopNarration();
       return;
     }
 
     window.speechSynthesis.cancel();
     setIsPlaying(true);
+    completeRoutineStep('story');
+    startSleepTimerIfNeeded();
 
     const segments = splitNarrationText(selectedStory.text);
     let index = 0;
@@ -427,12 +588,15 @@ export default function App() {
 
   const reset = () => {
     stopNarration();
+    clearSleepTimer();
+    stopBreathing();
     setPrompt('');
     setPreferences(DEFAULT_PREFERENCES);
     setOptions([]);
     setSelectedStory(null);
     setIsPlaying(false);
     setError('');
+    setRoutineSteps([]);
   };
 
   const toggleVoiceInput = () => {
@@ -542,7 +706,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-left">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-3 text-left">
                   <label className="space-y-2">
                     <span className="text-xs uppercase tracking-[0.18em] text-purple-200/40">Child</span>
                     <input
@@ -586,8 +750,56 @@ export default function App() {
                       {STORY_LENGTHS.map(length => <option key={length}>{length}</option>)}
                     </select>
                   </label>
+
+                  <label className="space-y-2">
+                    <span className="text-xs uppercase tracking-[0.18em] text-purple-200/40">Focus</span>
+                    <select
+                      value={preferences.comfortFocus}
+                      onChange={(e) => updatePreferences('comfortFocus', e.target.value)}
+                      className="w-full bg-[#171126] border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/40"
+                    >
+                      {COMFORT_FOCUSES.map(focus => <option key={focus}>{focus}</option>)}
+                    </select>
+                  </label>
+
+                  <label className="space-y-2">
+                    <span className="text-xs uppercase tracking-[0.18em] text-purple-200/40">Companion</span>
+                    <input
+                      type="text"
+                      value={preferences.companion}
+                      onChange={(e) => updatePreferences('companion', e.target.value)}
+                      placeholder="Stuffie, pet..."
+                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/40 placeholder:text-white/20"
+                    />
+                  </label>
                 </div>
               </form>
+
+              <section className="w-full max-w-3xl text-left space-y-4">
+                <div className="flex items-center gap-2 text-purple-200/70">
+                  <Heart className="w-4 h-4" />
+                  <h2 className="text-sm font-semibold uppercase tracking-[0.2em]">Tonight's Wind-Down</h2>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {ROUTINE_PRESETS.map(routine => (
+                    <button
+                      key={routine.id}
+                      type="button"
+                      onClick={() => applyRoutine(routine.id)}
+                      className={cn(
+                        "rounded-2xl border p-4 text-left transition-all",
+                        selectedRoutineId === routine.id
+                          ? "border-purple-400/50 bg-purple-500/15 shadow-lg shadow-purple-950/20"
+                          : "border-white/10 bg-white/[0.04] hover:bg-white/[0.07]"
+                      )}
+                    >
+                      <p className="font-serif text-lg text-white">{routine.name}</p>
+                      <p className="mt-1 text-sm leading-relaxed text-purple-200/50">{routine.description}</p>
+                    </button>
+                  ))}
+                </div>
+              </section>
 
               {error && (
                 <div className="w-full max-w-2xl rounded-2xl border border-red-400/20 bg-red-500/10 px-5 py-4 text-sm text-red-100">
@@ -765,7 +977,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="flex-1 overflow-y-auto pr-4 custom-scrollbar mask-fade-edges">
+                  <div className="min-h-[220px] max-h-[36vh] overflow-y-auto pr-4 custom-scrollbar mask-fade-edges md:max-h-[44vh]">
                     <div className="max-w-2xl mx-auto py-8">
                       <p className="text-xl md:text-2xl font-serif leading-relaxed text-purple-100/80 italic text-center whitespace-pre-wrap">
                         {selectedStory.text}
@@ -775,7 +987,44 @@ export default function App() {
                   </div>
 
                   <div className="mt-12 flex flex-col items-center space-y-8">
-                    <div className="grid w-full max-w-2xl grid-cols-1 gap-4 md:grid-cols-2">
+                    <div className="grid w-full max-w-4xl grid-cols-1 gap-4 md:grid-cols-3">
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-left">
+                        <div className="mb-3 flex items-center gap-2 text-purple-200/70">
+                          <Wind className="h-4 w-4" />
+                          <h3 className="text-xs font-semibold uppercase tracking-[0.18em]">Bedtime Routine</h3>
+                        </div>
+                        <p className="mb-3 text-xs text-purple-200/45">{selectedRoutine.name}: {selectedRoutine.description}</p>
+
+                        <div className="space-y-2">
+                          {[
+                            ['breathe', 'Breathe'],
+                            ['story', 'Story'],
+                            ['drift', 'Drift sound'],
+                          ].map(([step, label]) => {
+                            const done = routineSteps.includes(step);
+                            return (
+                              <div key={step} className="flex items-center gap-2 text-sm text-purple-100/70">
+                                {done ? <CheckCircle2 className="h-4 w-4 text-emerald-300" /> : <Circle className="h-4 w-4 text-purple-200/30" />}
+                                <span>{label}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={breathingActive ? stopBreathing : startBreathing}
+                          className={cn(
+                            "mt-4 w-full rounded-xl px-4 py-3 text-sm font-semibold transition-colors",
+                            breathingActive
+                              ? "bg-purple-500/20 text-purple-100 hover:bg-purple-500/30"
+                              : "bg-white/10 text-purple-100 hover:bg-white/15"
+                          )}
+                        >
+                          {breathingActive ? `Breathing ${formatTimer(breathingRemaining)}` : "Start 1-min breathing"}
+                        </button>
+                      </div>
+
                       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-left">
                         <div className="mb-3 flex items-center gap-2 text-purple-200/70">
                           <Volume2 className="h-4 w-4" />
@@ -849,6 +1098,28 @@ export default function App() {
                         <p className="mt-2 text-xs text-purple-200/40">
                           Select a track, then play it manually.
                         </p>
+
+                        <label className="mt-4 block space-y-2">
+                          <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-purple-200/50">
+                            <Timer className="h-3.5 w-3.5" />
+                            Sleep Timer
+                          </span>
+                          <select
+                            value={sleepTimerMinutes}
+                            onChange={(e) => setSleepTimerMinutes(Number(e.target.value))}
+                            className="w-full rounded-xl border border-white/10 bg-[#171126] px-4 py-3 text-sm text-purple-50 focus:outline-none focus:ring-2 focus:ring-purple-500/40"
+                          >
+                            {SLEEP_TIMER_OPTIONS.map(option => (
+                              <option key={option.minutes} value={option.minutes}>{option.label}</option>
+                            ))}
+                          </select>
+                        </label>
+
+                        {sleepTimerRemaining > 0 && (
+                          <p className="mt-2 text-xs text-purple-200/50">
+                            Stops all sound in {formatTimer(sleepTimerRemaining)}.
+                          </p>
+                        )}
                       </div>
                     </div>
 

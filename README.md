@@ -2,6 +2,12 @@
 
 A local-first bedtime story app for creating gentle story ideas, generating full stories with Ollama, saving recent stories, and reading them aloud in the browser.
 
+## Bedtime Features
+
+- Personalized story profile with child name, age range, comfort focus, and favorite companion.
+- Wind-down routine presets for sleepy reset, big feelings, and brave-in-the-dark nights.
+- Manual voice, narration pace, background music, and sleep timer controls.
+
 ## Run Locally
 
 **Prerequisites:** Node.js and Ollama.
