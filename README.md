@@ -30,6 +30,20 @@ OLLAMA_MODEL="llama3.2:1b"
 
 If Ollama is not running or no model is installed, the app still works with its built-in story generator.
 
+## Android App
+
+The app is wrapped with Capacitor under `android/`.
+
+```powershell
+npm run android:sync
+$env:JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"
+$env:ANDROID_HOME="$env:LOCALAPPDATA\Android\Sdk"
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+android\gradlew.bat -p android assembleDebug
+```
+
+The debug APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
+
 ## Family Voice Studio
 
 Voice cloning is optional and requires an ElevenLabs API key on the server:
