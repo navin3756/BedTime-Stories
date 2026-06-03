@@ -28,6 +28,22 @@ const ollamaBaseUrl = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
 const preferredModel = process.env.OLLAMA_MODEL || "";
 let cachedModel: string | null | undefined;
 
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
+function canUseOllamaFromBrowser(): boolean {
+  if (typeof window === "undefined") return true;
+
+  try {
+    const appIsLocal = isLoopbackHost(window.location.hostname);
+    const ollamaIsLocal = isLoopbackHost(new URL(ollamaBaseUrl).hostname);
+    return appIsLocal || !ollamaIsLocal;
+  } catch {
+    return false;
+  }
+}
+
 export function isCloudStoryProviderConfigured(): boolean {
   return false;
 }
@@ -38,6 +54,11 @@ export function getLocalLlmLabel(): string {
 
 async function getOllamaModel(): Promise<string | null> {
   if (cachedModel !== undefined) return cachedModel;
+
+  if (!canUseOllamaFromBrowser()) {
+    cachedModel = null;
+    return cachedModel;
+  }
 
   try {
     const response = await fetch(`${ollamaBaseUrl}/api/tags`);
