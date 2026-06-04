@@ -127,6 +127,12 @@ const OPTION_STYLES = [
   { id: "wish", titlePrefix: "The Goodnight Wish of", opening: "A cozy mystery" },
 ];
 
+const RELATIONSHIP_CONFLICT_STYLES = [
+  { id: "listening", titleSuffix: "Who Found Their Way Back", repair: "pause, listen to each other's feelings, and make up" },
+  { id: "promise", titlePrefix: "The Goodnight Promise Between", repair: "share an apology, find a fair solution, and feel close again" },
+  { id: "star", titleSuffix: "and the Shared Star", repair: "turn an argument into a kind conversation and a shared bedtime promise" },
+];
+
 function hashText(value: string): number {
   let hash = 2166136261;
   for (let index = 0; index < value.length; index += 1) {
@@ -160,6 +166,29 @@ function ideaLabel(prompt: string): string {
 function summaryIdea(summary: string): string {
   const match = summary.match(/inspired by (.*?):/i);
   return ideaLabel(match?.[1] || summary);
+}
+
+function isRelationshipConflictIdea(value: string): boolean {
+  const hasRelationship = /\b(sisters?|siblings?|brothers?|friends?|cousins?)\b/i.test(value);
+  const hasConflict = /\b(fight(?:ing)?|argument|arguing|disagreement|quarrel|not getting along|mad at|upset with)\b/i.test(value);
+  return hasRelationship && hasConflict;
+}
+
+function relationshipNoun(value: string): string {
+  if (/\bsisters?\b/i.test(value)) return "sisters";
+  if (/\bbrothers?\b/i.test(value)) return "brothers";
+  if (/\bsiblings?\b/i.test(value)) return "siblings";
+  if (/\bcousins?\b/i.test(value)) return "cousins";
+  return "friends";
+}
+
+function relationshipSubject(value: string, preferences: StoryPreferences): string {
+  const childName = cleanInput(preferences.childName, 40);
+  const relationship = relationshipNoun(value);
+  if (!childName) return `two ${relationship}`;
+  if (relationship === "friends") return `${childName} and a good friend`;
+  if (relationship === "siblings") return `${childName} and a sibling`;
+  return `${childName} and their ${relationship.slice(0, -1)}`;
 }
 
 function chooseWorld(prompt: string): StoryWorld {
@@ -205,6 +234,43 @@ export function isStorySafetyRefusal(error: unknown): boolean {
 
 export function generateLocalStoryText(title: string, summary: string, preferences: StoryPreferences): string {
   validateStoryIdea(`${title} ${summary}`, preferences);
+
+  if (isRelationshipConflictIdea(`${title} ${summary}`)) {
+    const relationship = relationshipNoun(`${title} ${summary}`);
+    const subject = relationshipSubject(`${title} ${summary}`, preferences);
+    const sentenceSubject = sentenceStart(subject);
+    const isToddler = preferences.ageRange === "2-3";
+
+    if (isToddler) {
+      return `${title}
+
+One cozy evening, ${subject} were building a blanket fort together.
+
+They both wanted the same soft pillow. A small disagreement made them feel upset, so they stopped and took three slow breaths.
+
+${sentenceSubject} listened to each other. One said, "I'm sorry." The other said, "I love you." Then they found another pillow and finished the fort together.
+
+The ${relationship} felt close again. They cuddled beneath their blankets, said goodnight, and drifted into peaceful sleep.`;
+    }
+
+    return `${title}
+
+One cozy evening, ${subject} were building a blanket fort together. They had laughed as they tucked sheets over chairs and made a little window for the moon.
+
+Then they both reached for the same soft blue pillow. A small disagreement became an argument, and their voices grew louder than they meant them to. The fort no longer felt cozy, because neither of them wanted to feel far away from the other.
+
+The ${relationship} took a little space and each breathed in slowly, then breathed out gently. When their bodies felt calmer, they remembered that being close did not mean they had to agree about everything.
+
+${sentenceSubject} sat beside the unfinished fort. One explained how it felt to have an idea ignored. The other explained how it felt to never get a turn. They listened without interrupting, and each discovered something important in the other's words.
+
+"I'm sorry I shouted," one said. "I'm sorry I did not listen," the other replied. Their apology did not erase the disagreement, but it made room for kindness again.
+
+Together they found a fair solution: the blue pillow could become a shared moon seat, with enough room for both of them. They finished the fort side by side and added two small stars above its doorway.
+
+The ${relationship} felt close again, not because they never had arguments, but because they knew how to pause, listen, apologize, and make up.
+
+At bedtime, they carried their goodnight promise with them: even after a difficult moment, love could help them find their way back to each other. Then the room grew quiet, the moon watched over them, and they drifted into peaceful sleep.`;
+  }
 
   const child = childReference(preferences);
   const sentenceChild = sentenceChildReference(preferences);
@@ -258,6 +324,20 @@ function localStoryOptions(prompt: string, preferences: StoryPreferences): Story
   const companion = companionReference(preferences);
   const world = chooseWorld(prompt);
   const seed = hashText(`${prompt}|${preferences.mood}|${preferences.comfortFocus}|${preferences.companion}`);
+
+  if (isRelationshipConflictIdea(prompt)) {
+    const relationship = relationshipNoun(prompt);
+    const relationshipTitle = titleCase(relationship);
+    const subject = sentenceStart(relationshipSubject(prompt, preferences));
+
+    return RELATIONSHIP_CONFLICT_STYLES.map(style => ({
+      id: `offline-relationship-${style.id}-${seed}`,
+      title: style.titlePrefix
+        ? `${style.titlePrefix} ${relationshipTitle}`
+        : `The ${relationshipTitle} ${style.titleSuffix}`,
+      summary: `${subject} work through a gentle disagreement as they ${style.repair}.`,
+    }));
+  }
 
   return OPTION_STYLES.map((style, index) => {
     const task = pick(world.tasks, seed, index);
