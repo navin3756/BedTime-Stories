@@ -2,6 +2,7 @@ export interface StoryOption {
   id: string;
   title: string;
   summary: string;
+  prompt?: string;
 }
 
 export interface StoryPreferences {
@@ -21,6 +22,30 @@ interface StoryWorld {
   sounds: string[];
   tasks: string[];
   treasures: string[];
+}
+
+interface StoryArc {
+  id: string;
+  keywords: string[];
+  challenge: string;
+  repairSkill: string;
+  resolution: string;
+}
+
+interface TopicShape {
+  mainCharacter: string;
+  mission: string;
+  object: string;
+}
+
+interface StoryPlan {
+  topic: string;
+  topicWords: string[];
+  titleIdea: string;
+  world: StoryWorld;
+  arc: StoryArc;
+  seed: number;
+  shape: TopicShape;
 }
 
 const GENERAL_HARM_REFUSAL = "I can't use that idea for a child's bedtime story. Let's make it gentle and safe, with no one getting hurt. Try friendship, animals, nature, or a magical helper.";
@@ -112,7 +137,7 @@ const WORLDS: StoryWorld[] = [
   },
   {
     id: "garden",
-    keywords: [],
+    keywords: ["garden", "flower", "flowers", "butterfly", "butterflies", "cricket", "crickets"],
     place: "a moonlit garden hidden just beyond bedtime",
     sights: ["flowers glowing like little lamps", "a path of soft silver stones", "butterflies resting beneath leaves"],
     sounds: ["petals brushing in the breeze", "a fountain making a sleepy rhythm", "crickets playing a quiet lullaby"],
@@ -122,15 +147,61 @@ const WORLDS: StoryWorld[] = [
 ];
 
 const OPTION_STYLES = [
-  { id: "path", titlePrefix: "The Moonlit Path to", opening: "A gentle journey" },
-  { id: "star", titlePrefix: "The Little Star and", opening: "A kind new friend" },
-  { id: "wish", titlePrefix: "The Goodnight Wish of", opening: "A cozy mystery" },
+  { id: "path", title: (idea: string) => `The Gentle Night of ${idea}`, opening: "A calm bedtime story" },
+  { id: "star", title: (idea: string) => `${idea} and the Little Listening Star`, opening: "A kind new adventure" },
+  { id: "wish", title: (idea: string) => `The Goodnight Promise of ${idea}`, opening: "A cozy bedtime promise" },
 ];
 
-const RELATIONSHIP_CONFLICT_STYLES = [
-  { id: "listening", titleSuffix: "Who Found Their Way Back", repair: "pause, listen to each other's feelings, and make up" },
-  { id: "promise", titlePrefix: "The Goodnight Promise Between", repair: "share an apology, find a fair solution, and feel close again" },
-  { id: "star", titleSuffix: "and the Shared Star", repair: "turn an argument into a kind conversation and a shared bedtime promise" },
+const STORY_ARCS: StoryArc[] = [
+  {
+    id: "repair",
+    keywords: ["fight", "argument", "arguing", "disagreement", "quarrel", "mad", "upset", "bonding", "sister", "brother", "sibling", "friend"],
+    challenge: "a small disagreement made the moment feel prickly and hard",
+    repairSkill: "pause, listen, apologize, and choose a kinder way forward",
+    resolution: "the hard feeling softened into closeness again",
+  },
+  {
+    id: "sharing",
+    keywords: ["share", "sharing", "kindness", "cookie", "cookies", "turns", "together", "team"],
+    challenge: "there was one lovely thing and more than one heart hoping for it",
+    repairSkill: "notice what everyone needed and find a fair, gentle plan",
+    resolution: "sharing made the cozy moment feel bigger, not smaller",
+  },
+  {
+    id: "making",
+    keywords: ["build", "make", "bake", "cook", "paint", "garden", "open", "opening", "music", "sing", "singing", "dance", "dancing"],
+    challenge: "the first try did not come together right away",
+    repairSkill: "slow down, try again, and celebrate each small step",
+    resolution: "the finished creation became a quiet goodnight gift",
+  },
+  {
+    id: "learning",
+    keywords: ["learn", "learning", "teach", "teaching", "practice", "school", "try", "brave"],
+    challenge: "the new skill felt a little wobbly at first",
+    repairSkill: "take one calm breath and try the next small step",
+    resolution: "trying slowly helped the new skill feel friendly",
+  },
+  {
+    id: "finding",
+    keywords: ["find", "finding", "lost", "missing", "search", "look", "discover", "treasure"],
+    challenge: "something important seemed missing for a little while",
+    repairSkill: "look carefully, ask for help, and trust the quiet clues",
+    resolution: "the missing piece found its way home",
+  },
+  {
+    id: "exploring",
+    keywords: ["explore", "exploring", "visit", "visiting", "travel", "journey", "adventure", "rain", "mars", "moon", "sea", "forest"],
+    challenge: "the new place felt wide and unfamiliar at first",
+    repairSkill: "move slowly, stay together, and notice one friendly detail at a time",
+    resolution: "the unfamiliar place became soft, known, and safe",
+  },
+  {
+    id: "wonder",
+    keywords: [],
+    challenge: "the idea needed a gentle shape before it could become a bedtime story",
+    repairSkill: "name each special detail and place it carefully into the adventure",
+    resolution: "the whole idea settled into a calm and happy dream",
+  },
 ];
 
 function hashText(value: string): number {
@@ -153,7 +224,7 @@ function cleanInput(value: string, maxLength = 120): string {
 function titleCase(value: string): string {
   return value
     .split(" ")
-    .slice(0, 7)
+    .slice(0, 8)
     .map(word => word ? word[0].toUpperCase() + word.slice(1).toLowerCase() : "")
     .join(" ");
 }
@@ -163,37 +234,146 @@ function ideaLabel(prompt: string): string {
   return cleaned || "A Little Dream";
 }
 
-function summaryIdea(summary: string): string {
-  const match = summary.match(/inspired by (.*?):/i);
-  return ideaLabel(match?.[1] || summary);
-}
-
-function isRelationshipConflictIdea(value: string): boolean {
-  const hasRelationship = /\b(sisters?|siblings?|brothers?|friends?|cousins?)\b/i.test(value);
-  const hasConflict = /\b(fight(?:ing)?|argument|arguing|disagreement|quarrel|not getting along|mad at|upset with)\b/i.test(value);
-  return hasRelationship && hasConflict;
-}
-
-function relationshipNoun(value: string): string {
-  if (/\bsisters?\b/i.test(value)) return "sisters";
-  if (/\bbrothers?\b/i.test(value)) return "brothers";
-  if (/\bsiblings?\b/i.test(value)) return "siblings";
-  if (/\bcousins?\b/i.test(value)) return "cousins";
-  return "friends";
-}
-
-function relationshipSubject(value: string, preferences: StoryPreferences): string {
-  const childName = cleanInput(preferences.childName, 40);
-  const relationship = relationshipNoun(value);
-  if (!childName) return `two ${relationship}`;
-  if (relationship === "friends") return `${childName} and a good friend`;
-  if (relationship === "siblings") return `${childName} and a sibling`;
-  return `${childName} and their ${relationship.slice(0, -1)}`;
-}
-
 function chooseWorld(prompt: string): StoryWorld {
   const lower = prompt.toLowerCase();
   return WORLDS.find(world => world.keywords.some(keyword => lower.includes(keyword))) || WORLDS[WORLDS.length - 1];
+}
+
+const STOP_WORDS = new Set([
+  "about", "after", "again", "along", "also", "and", "around", "because", "before", "being", "between",
+  "from", "into", "little", "over", "that", "their", "there", "they", "through", "with", "while",
+  "a", "an", "the", "to", "in", "on", "of", "for", "is", "are", "was", "were",
+]);
+
+let optionRunCounter = 0;
+
+function meaningfulWords(value: string): string[] {
+  const words = value.toLowerCase().match(/[a-z]+/g) ?? [];
+  return Array.from(new Set(words.filter(word => word.length > 2 && !STOP_WORDS.has(word)))).slice(0, 8);
+}
+
+function joinWords(words: string[]): string {
+  if (words.length === 0) return "the bedtime idea";
+  if (words.length === 1) return words[0];
+  if (words.length === 2) return `${words[0]} and ${words[1]}`;
+  return `${words.slice(0, -1).join(", ")}, and ${words[words.length - 1]}`;
+}
+
+function extractTopicFromSummary(summary: string): string {
+  const topicMatch = summary.match(/\babout ([^.]+?)(?:, where|, as|, with|\.|$)/i);
+  return ideaLabel(topicMatch?.[1] || summary);
+}
+
+function chooseArc(topic: string): StoryArc {
+  const lower = topic.toLowerCase();
+  return STORY_ARCS.find(arc => arc.keywords.some(keyword => lower.includes(keyword))) || STORY_ARCS[STORY_ARCS.length - 1];
+}
+
+function makeVariationKey(value?: string): string {
+  if (value) return value;
+  optionRunCounter += 1;
+
+  const cryptoObject = globalThis.crypto;
+  if (cryptoObject?.getRandomValues) {
+    const values = new Uint32Array(1);
+    cryptoObject.getRandomValues(values);
+    return `${Date.now()}-${optionRunCounter}-${values[0]}`;
+  }
+
+  return `${Date.now()}-${optionRunCounter}-${Math.random()}`;
+}
+
+function withArticle(value: string): string {
+  const cleaned = cleanInput(value, 80).replace(/[.!?]+$/, "");
+  if (!cleaned) return "a little dream";
+  if (/^(a|an|the|two|three|many|one)\b/i.test(cleaned)) return cleaned;
+  return `${/^[aeiou]/i.test(cleaned) ? "an" : "a"} ${cleaned}`;
+}
+
+function describeTopic(topic: string): TopicShape {
+  const cleaned = ideaLabel(topic);
+  const lower = cleaned.toLowerCase();
+
+  if (/\bsisters?\b/i.test(cleaned) && /\b(fight|argument|disagreement|quarrel)\b/i.test(cleaned)) {
+    return {
+      mainCharacter: "two sisters",
+      mission: "bonding after a fight",
+      object: "a repaired sister hug",
+    };
+  }
+
+  const actionMatch = cleaned.match(
+    /^(.*?)\b(learning to|teaching|opening|singing|exploring|finding|preparing|sharing|visiting|building|making|baking|dancing|gardening|helping|looking for)\b\s*(.*)$/i,
+  );
+
+  if (actionMatch) {
+    const actor = withArticle(actionMatch[1]);
+    const action = actionMatch[2].toLowerCase();
+    const rest = cleanInput(actionMatch[3], 90).replace(/[.!?]+$/, "");
+    const mission = rest ? `${action} ${rest}` : action;
+
+    return {
+      mainCharacter: actor,
+      mission,
+      object: rest || mission,
+    };
+  }
+
+  return {
+    mainCharacter: withArticle(cleaned),
+    mission: "finding a cozy bedtime adventure",
+    object: cleaned,
+  };
+}
+
+function createStoryPlan(topicSource: string, preferences: StoryPreferences, variationKey: string): StoryPlan {
+  const topic = ideaLabel(topicSource);
+  const seed = hashText(`${topic}|${preferences.ageRange}|${preferences.mood}|${preferences.comfortFocus}|${variationKey}`);
+  return {
+    topic,
+    topicWords: meaningfulWords(topic),
+    titleIdea: titleCase(topic),
+    world: chooseWorld(topic),
+    arc: chooseArc(topic),
+    seed,
+    shape: describeTopic(topic),
+  };
+}
+
+function topicDetailSentence(plan: StoryPlan): string {
+  return `The adventure made room for ${joinWords(plan.topicWords)}, so the story felt like the idea ${plan.shape.mainCharacter} had brought with them.`;
+}
+
+function storyPlace(plan: StoryPlan): string {
+  if (plan.world.id !== "garden") return plan.world.place;
+  return `a cozy bedtime corner where ${plan.shape.mainCharacter} could practice ${plan.shape.mission}`;
+}
+
+function topicTask(plan: StoryPlan, offset: number): string {
+  const details = joinWords(plan.topicWords);
+  const frames = [
+    `help ${plan.shape.mainCharacter} with ${plan.shape.mission}`,
+    `make a gentle plan around ${details}`,
+    `turn ${plan.shape.object} into a calm bedtime promise`,
+  ];
+
+  if (plan.arc.id === "repair") {
+    return pick([
+      `help ${plan.shape.mainCharacter} listen and become close again`,
+      `turn ${plan.shape.object} into a listening-and-apology story`,
+      `find a gentle way through ${details}`,
+    ], plan.seed, offset);
+  }
+
+  if (plan.arc.id === "sharing") {
+    return pick([
+      `help ${plan.shape.mainCharacter} share ${plan.shape.object}`,
+      `make ${details} feel fair and kind`,
+      `turn ${plan.shape.mission} into a cozy sharing plan`,
+    ], plan.seed, offset);
+  }
+
+  return pick(frames, plan.seed, offset);
 }
 
 function childReference(preferences: StoryPreferences): string {
@@ -232,56 +412,25 @@ export function isStorySafetyRefusal(error: unknown): boolean {
   return [GENERAL_HARM_REFUSAL, IDENTITY_OR_ADULT_REFUSAL, SUPPORTIVE_REFUSAL].includes(error.message);
 }
 
-export function generateLocalStoryText(title: string, summary: string, preferences: StoryPreferences): string {
-  validateStoryIdea(`${title} ${summary}`, preferences);
-
-  if (isRelationshipConflictIdea(`${title} ${summary}`)) {
-    const relationship = relationshipNoun(`${title} ${summary}`);
-    const subject = relationshipSubject(`${title} ${summary}`, preferences);
-    const sentenceSubject = sentenceStart(subject);
-    const isToddler = preferences.ageRange === "2-3";
-
-    if (isToddler) {
-      return `${title}
-
-One cozy evening, ${subject} were building a blanket fort together.
-
-They both wanted the same soft pillow. A small disagreement made them feel upset, so they stopped and took three slow breaths.
-
-${sentenceSubject} listened to each other. One said, "I'm sorry." The other said, "I love you." Then they found another pillow and finished the fort together.
-
-The ${relationship} felt close again. They cuddled beneath their blankets, said goodnight, and drifted into peaceful sleep.`;
-    }
-
-    return `${title}
-
-One cozy evening, ${subject} were building a blanket fort together. They had laughed as they tucked sheets over chairs and made a little window for the moon.
-
-Then they both reached for the same soft blue pillow. A small disagreement became an argument, and their voices grew louder than they meant them to. The fort no longer felt cozy, because neither of them wanted to feel far away from the other.
-
-The ${relationship} took a little space and each breathed in slowly, then breathed out gently. When their bodies felt calmer, they remembered that being close did not mean they had to agree about everything.
-
-${sentenceSubject} sat beside the unfinished fort. One explained how it felt to have an idea ignored. The other explained how it felt to never get a turn. They listened without interrupting, and each discovered something important in the other's words.
-
-"I'm sorry I shouted," one said. "I'm sorry I did not listen," the other replied. Their apology did not erase the disagreement, but it made room for kindness again.
-
-Together they found a fair solution: the blue pillow could become a shared moon seat, with enough room for both of them. They finished the fort side by side and added two small stars above its doorway.
-
-The ${relationship} felt close again, not because they never had arguments, but because they knew how to pause, listen, apologize, and make up.
-
-At bedtime, they carried their goodnight promise with them: even after a difficult moment, love could help them find their way back to each other. Then the room grew quiet, the moon watched over them, and they drifted into peaceful sleep.`;
-  }
+export function generateLocalStoryText(title: string, summary: string, preferences: StoryPreferences, prompt?: string): string {
+  const topicSource = prompt || extractTopicFromSummary(summary);
+  validateStoryIdea(`${title} ${summary} ${topicSource}`, preferences);
 
   const child = childReference(preferences);
   const sentenceChild = sentenceChildReference(preferences);
   const companion = companionReference(preferences);
   const sentenceCompanion = sentenceStart(companion);
-  const world = chooseWorld(summary);
-  const seed = hashText(`${title}|${summary}|${preferences.ageRange}|${preferences.mood}|${preferences.comfortFocus}`);
+  const plan = createStoryPlan(topicSource, preferences, `${title}|${summary}`);
+  const world = plan.world;
+  const details = joinWords(plan.topicWords);
+  const mainCharacter = plan.shape.mainCharacter;
+  const mission = plan.shape.mission;
+  const place = storyPlace(plan);
+  const seed = plan.seed;
   const sight = pick(world.sights, seed, 1);
   const secondSight = pick(world.sights, seed, 2);
   const sound = pick(world.sounds, seed, 3);
-  const task = pick(world.tasks, seed, 4);
+  const task = topicTask(plan, 4);
   const treasure = pick(world.treasures, seed, 5);
   const focus = preferences.comfortFocus || "falling asleep peacefully";
   const extraCount = lengthParagraphs(preferences);
@@ -292,64 +441,67 @@ At bedtime, they carried their goodnight promise with them: even after a difficu
 
   const extraParagraphs = [
     isToddler
-      ? `${sentenceChild} and ${companion} went slowly. They saw ${secondSight}. They listened to ${sound}.`
-      : `${sentenceChild} and ${companion} took their time. They noticed ${secondSight}, listened to ${sound}, and discovered that the whole world became easier to understand when nobody hurried.`,
+      ? `${sentenceChild} and ${companion} went slowly. They saw ${secondSight}. ${sentenceStart(mainCharacter)} kept practicing ${mission}.`
+      : `${sentenceChild} and ${companion} took their time. They noticed ${secondSight}, listened to ${sound}, and let ${details} guide what happened next.`,
     `At a quiet resting place, ${companion} invited ${child} to breathe in slowly, as if smelling a favorite flower, and breathe out gently, as if cooling a warm cup of cocoa. They did this three times, and each breath made the night feel softer.`,
     `Before leaving, they shared one kind thought about the day and tucked one hopeful thought away for tomorrow. The path seemed to glow a little brighter, pleased to be trusted with both.`,
   ].slice(0, extraCount);
 
+  if (isToddler) {
+    return `${title}
+
+Once, when the room was quiet, ${child} thought about ${plan.topic}.
+
+In the bedtime world, ${mainCharacter} had a gentle mission: ${mission}. ${topicDetailSentence(plan)}
+
+${sentenceChild} and ${companion} found ${place}. They saw ${sight}. A small sleepy problem appeared: ${plan.arc.challenge}.
+
+They remembered to ${plan.arc.repairSkill}. Then ${plan.arc.resolution}.
+
+${sentenceStart(safeWords)} ${sentenceChild} took one slow breath and drifted into peaceful sleep.`;
+  }
+
   return `${title}
 
-Once, when the room was quiet and the stars were beginning to blink, ${child} discovered a small door made of moonlight.
+Once, when the room was quiet and the stars were beginning to blink, ${child} thought about ${plan.topic}. The idea felt special enough to become a bedtime adventure.
 
-On the other side was ${world.place}. It was inspired by ${summaryIdea(summary).toLowerCase()}, and there was ${sight} waiting nearby. ${sentenceCompanion} waved hello and explained that tonight they would ${task}.
+On the other side of a soft moonlit doorway was ${place}. There, ${mainCharacter} had a gentle mission: ${mission}. ${topicDetailSentence(plan)}
+
+${sentenceCompanion} waved hello beside ${sight}. "Tonight," ${companion} said, "we will ${task}, and we will keep the adventure gentle enough for sleep."
 
 Nothing in this place was rushed or scary. ${sentenceChild} could hear ${sound}. ${sentenceStart(safeWords)}
 
+Soon, ${plan.arc.challenge}. ${sentenceChild} and ${companion} did not hurry past it. They used the bedtime plan: ${plan.arc.repairSkill}.
+
 ${extraParagraphs.join("\n\n")}
 
-Together they completed their quiet task. As a thank-you, the bedtime world gave ${child} ${treasure}. It was not a treasure to keep in a pocket, but a reminder that ${focus} could begin with one slow breath and one kind thought.
+Together they helped ${mainCharacter} finish ${mission}. As a thank-you, the bedtime world gave ${child} ${treasure}. It was not a treasure to keep in a pocket, but a reminder that ${focus} could begin with one slow breath and one kind thought.
+
+By the end, ${plan.arc.resolution}. The special details, ${details}, felt calm and safely tucked into the story.
 
 At last, a moonbeam showed the way home. ${sentenceChild} climbed back beneath the blankets, while ${companion} promised to stay close in every cozy dream.
 
 The moonlight door became a tiny sparkle on the wall. ${sentenceChild} took one deep breath, let the day grow still, and drifted into a calm and happy sleep.`;
 }
 
-function localStoryOptions(prompt: string, preferences: StoryPreferences): StoryOption[] {
+function localStoryOptions(prompt: string, preferences: StoryPreferences, variationKey?: string): StoryOption[] {
   validateStoryIdea(prompt, preferences);
 
-  const idea = ideaLabel(prompt);
-  const titleIdea = titleCase(idea);
+  const plan = createStoryPlan(prompt, preferences, makeVariationKey(variationKey));
   const sentenceChild = sentenceChildReference(preferences);
   const companion = companionReference(preferences);
-  const world = chooseWorld(prompt);
-  const seed = hashText(`${prompt}|${preferences.mood}|${preferences.comfortFocus}|${preferences.companion}`);
-
-  if (isRelationshipConflictIdea(prompt)) {
-    const relationship = relationshipNoun(prompt);
-    const relationshipTitle = titleCase(relationship);
-    const subject = sentenceStart(relationshipSubject(prompt, preferences));
-
-    return RELATIONSHIP_CONFLICT_STYLES.map(style => ({
-      id: `offline-relationship-${style.id}-${seed}`,
-      title: style.titlePrefix
-        ? `${style.titlePrefix} ${relationshipTitle}`
-        : `The ${relationshipTitle} ${style.titleSuffix}`,
-      summary: `${subject} work through a gentle disagreement as they ${style.repair}.`,
-    }));
-  }
 
   return OPTION_STYLES.map((style, index) => {
-    const task = pick(world.tasks, seed, index);
-    const sight = pick(world.sights, seed, index + 2);
-    const title = index === 1
-      ? `${style.titlePrefix} ${titleIdea}`
-      : `${style.titlePrefix} ${titleIdea}`;
+    const task = topicTask(plan, index);
+    const sight = pick(plan.world.sights, plan.seed, index + 2);
+    const title = style.title(plan.titleIdea);
+    const details = joinWords(plan.topicWords);
 
     return {
-      id: `offline-${world.id}-${style.id}-${seed}`,
+      id: `offline-${plan.world.id}-${plan.arc.id}-${style.id}-${plan.seed}`,
       title,
-      summary: `${style.opening} inspired by ${idea}: ${sentenceChild} and ${companion} visit ${world.place}, notice ${sight}, and ${task} while practicing ${preferences.comfortFocus}.`,
+      prompt: plan.topic,
+      summary: `${style.opening} about ${plan.shape.mainCharacter} and ${plan.shape.mission}, with ${details} woven into the adventure. ${sentenceChild} and ${companion} visit ${storyPlace(plan)}, notice ${sight}, ${task}, and use ${plan.arc.repairSkill} so ${plan.arc.resolution}.`,
     };
   });
 }
@@ -379,10 +531,10 @@ async function* streamLocalStory(text: string, signal?: AbortSignal) {
   }
 }
 
-export async function generateStoryOptions(prompt: string, preferences: StoryPreferences): Promise<StoryOption[]> {
-  return localStoryOptions(prompt, preferences);
+export async function generateStoryOptions(prompt: string, preferences: StoryPreferences, variationKey?: string): Promise<StoryOption[]> {
+  return localStoryOptions(prompt, preferences, variationKey);
 }
 
-export async function* generateFullStoryStream(title: string, summary: string, preferences: StoryPreferences, signal?: AbortSignal) {
-  yield* streamLocalStory(generateLocalStoryText(title, summary, preferences), signal);
+export async function* generateFullStoryStream(title: string, summary: string, preferences: StoryPreferences, signal?: AbortSignal, prompt?: string) {
+  yield* streamLocalStory(generateLocalStoryText(title, summary, preferences, prompt), signal);
 }

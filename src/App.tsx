@@ -647,7 +647,13 @@ export default function App() {
     let fullText = '';
     try {
       setError('');
-      const stream = generateFullStoryStream(option.title, option.summary, storyPreferences, generationController.signal);
+      const stream = generateFullStoryStream(
+        option.title,
+        option.summary,
+        storyPreferences,
+        generationController.signal,
+        option.prompt || storyPrompt,
+      );
       for await (const chunk of stream) {
         if (generationController.signal.aborted) return;
         fullText += chunk;
