@@ -22,11 +22,9 @@ try {
     npm run android:sync
   }
 
-  if (-not $env:JAVA_HOME) {
-    $androidStudioJbr = "C:\Program Files\Android\Android Studio\jbr"
-    if (Test-Path $androidStudioJbr) {
-      $env:JAVA_HOME = $androidStudioJbr
-    }
+  $androidStudioJbr = "C:\Program Files\Android\Android Studio\jbr"
+  if (Test-Path $androidStudioJbr) {
+    $env:JAVA_HOME = $androidStudioJbr
   }
 
   if (-not $env:ANDROID_HOME) {
@@ -38,6 +36,9 @@ try {
 
   $env:GRADLE_OPTS = "-Dorg.gradle.workers.max=1 -Dorg.gradle.parallel=false -Dorg.gradle.daemon=false"
   & (Join-Path $repoRoot "android\gradlew.bat") -p (Join-Path $repoRoot "android") bundleRelease --no-daemon --max-workers=1 "-Dorg.gradle.jvmargs=-Xmx512m -Xss512k -XX:CICompilerCount=2 -Dfile.encoding=UTF-8"
+  if ($LASTEXITCODE -ne 0) {
+    throw "Gradle bundleRelease failed with exit code $LASTEXITCODE"
+  }
 
   if (-not (Test-Path $bundlePath)) {
     throw "Release bundle was not created at $bundlePath"

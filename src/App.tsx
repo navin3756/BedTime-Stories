@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, Moon, Play, Pause, RotateCcw, ArrowLeft, Loader2, Volume2, Music, CloudRain, Trees, Stars, Mic, MicOff, BookOpen, Trash2, Timer, Heart, CheckCircle2, Circle, Wind } from 'lucide-react';
-import { generateStoryOptions, generateFullStoryStream, generateStoryAudio, getLocalLlmLabel, isCloudStoryProviderConfigured, StoryOption, StoryPreferences } from './services/storyEngine';
+import { Sparkles, Moon, Play, Pause, RotateCcw, ArrowLeft, Loader2, Volume2, Music, CloudRain, Trees, Stars, BookOpen, Trash2, Timer, Heart, CheckCircle2, Circle, Wind } from 'lucide-react';
+import { generateStoryOptions, generateFullStoryStream, getLocalLlmLabel, isCloudStoryProviderConfigured, StoryOption, StoryPreferences } from './services/storyEngine';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
@@ -38,13 +38,10 @@ interface NarrationPreset {
 
 const STORY_LIBRARY_KEY = 'sweetdreams.savedStories';
 const STORY_PROFILE_KEY = 'sweetdreams.storyProfile';
-const FAMILY_VOICES_KEY = 'sweetdreams.familyVoices';
 const MAX_BROWSER_NARRATION_CHARS = 180;
 const ANDROID_SPEECH_MIN_RATE = 0.72;
 const ANDROID_SPEECH_MIN_PITCH = 0.84;
 const SPEECH_KEEP_ALIVE_MS = 7000;
-
-const VOICE_SAMPLE_PARAGRAPH = `I confirm this is my own voice, and I want Sweetdreams to create a private bedtime voice for my family. Tonight, take a slow breath with me. You are safe, you are loved, and this story is here to help you rest.`;
 
 const DEFAULT_PREFERENCES: StoryPreferences = {
   childName: '',
@@ -240,63 +237,38 @@ interface SavedStory {
   createdAt: string;
 }
 
-interface FamilyVoiceProfile {
-  id: string;
-  voiceId: string;
-  name: string;
-  createdAt: string;
-  requiresVerification: boolean;
-}
-
 export default function App() {
   const [prompt, setPrompt] = useState('');
   const [preferences, setPreferences] = useState<StoryPreferences>(DEFAULT_PREFERENCES);
   const [loading, setLoading] = useState(false);
-  const [audioLoading, setAudioLoading] = useState(false);
   const [error, setError] = useState('');
   const [options, setOptions] = useState<StoryOption[]>([]);
-  const [selectedStory, setSelectedStory] = useState<{ title: string; text: string; audioUrl: string | null } | null>(null);
+  const [selectedStory, setSelectedStory] = useState<{ title: string; text: string } | null>(null);
   const [savedStories, setSavedStories] = useState<SavedStory[]>([]);
-  const [familyVoices, setFamilyVoices] = useState<FamilyVoiceProfile[]>([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [bgMusicEnabled, setBgMusicEnabled] = useState(false);
   const [selectedMusicId, setSelectedMusicId] = useState('lullaby');
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoiceURI, setSelectedVoiceURI] = useState('');
-  const [selectedFamilyVoiceId, setSelectedFamilyVoiceId] = useState('');
   const [selectedNarrationPresetId, setSelectedNarrationPresetId] = useState('calm');
-  const [voiceCloneConfigured, setVoiceCloneConfigured] = useState(false);
-  const [voiceName, setVoiceName] = useState('Mom bedtime voice');
-  const [voiceConsent, setVoiceConsent] = useState(false);
-  const [voiceRecordingBlob, setVoiceRecordingBlob] = useState<Blob | null>(null);
-  const [voiceRecordingUrl, setVoiceRecordingUrl] = useState('');
-  const [voiceCloneLoading, setVoiceCloneLoading] = useState(false);
-  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
-  const [voiceStudioMessage, setVoiceStudioMessage] = useState('');
   const [sleepTimerMinutes, setSleepTimerMinutes] = useState(0);
   const [sleepTimerRemaining, setSleepTimerRemaining] = useState(0);
   const [selectedRoutineId, setSelectedRoutineId] = useState('sleepy-reset');
   const [routineSteps, setRoutineSteps] = useState<string[]>([]);
   const [breathingActive, setBreathingActive] = useState(false);
   const [breathingRemaining, setBreathingRemaining] = useState(60);
-  const [isListening, setIsListening] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const ambientRef = useRef<AmbientPlayer | null>(null);
   const narrationRef = useRef<SpeechSynthesisUtterance | null>(null);
   const narrationTimeoutRef = useRef<number | null>(null);
   const narrationKeepAliveRef = useRef<number | null>(null);
   const narrationSessionRef = useRef(0);
   const narrationStopRequestedRef = useRef(false);
-  const voiceMediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const voiceChunksRef = useRef<Blob[]>([]);
-  const storyAudioUrlRef = useRef('');
   const sleepTimerIntervalRef = useRef<number | null>(null);
   const sleepTimerEndRef = useRef<number | null>(null);
   const breathingIntervalRef = useRef<number | null>(null);
 
   const currentMusic = BG_MUSIC_TRACKS.find(t => t.id === selectedMusicId) || BG_MUSIC_TRACKS[0];
   const selectedVoice = availableVoices.find(voice => voice.voiceURI === selectedVoiceURI) || null;
-  const selectedFamilyVoice = familyVoices.find(voice => voice.id === selectedFamilyVoiceId) || null;
   const selectedNarrationPreset = NARRATION_PRESETS.find(preset => preset.id === selectedNarrationPresetId) || NARRATION_PRESETS[0];
   const selectedRoutine = ROUTINE_PRESETS.find(routine => routine.id === selectedRoutineId) || ROUTINE_PRESETS[0];
   const hasCloudProvider = isCloudStoryProviderConfigured();
@@ -309,13 +281,6 @@ export default function App() {
         setSavedStories(JSON.parse(rawStories));
       }
 
-      const rawVoices = window.localStorage.getItem(FAMILY_VOICES_KEY);
-      if (rawVoices) {
-        const voices = JSON.parse(rawVoices) as FamilyVoiceProfile[];
-        setFamilyVoices(voices);
-        setSelectedFamilyVoiceId(voices[0]?.id || '');
-      }
-
       const rawProfile = window.localStorage.getItem(STORY_PROFILE_KEY);
       if (rawProfile) {
         const profile = JSON.parse(rawProfile) as Partial<StoryPreferences> & { routineId?: string };
@@ -325,13 +290,6 @@ export default function App() {
     } catch (error) {
       console.error("Unable to load saved bedtime settings:", error);
     }
-  }, []);
-
-  useEffect(() => {
-    fetch('/api/voice-status')
-      .then(response => response.ok ? response.json() : { configured: false })
-      .then(data => setVoiceCloneConfigured(Boolean(data.configured)))
-      .catch(() => setVoiceCloneConfigured(false));
   }, []);
 
   useEffect(() => {
@@ -363,122 +321,6 @@ export default function App() {
   const persistSavedStories = (stories: SavedStory[]) => {
     setSavedStories(stories);
     window.localStorage.setItem(STORY_LIBRARY_KEY, JSON.stringify(stories));
-  };
-
-  const persistFamilyVoices = (voices: FamilyVoiceProfile[]) => {
-    setFamilyVoices(voices);
-    window.localStorage.setItem(FAMILY_VOICES_KEY, JSON.stringify(voices));
-    setSelectedFamilyVoiceId(prev => voices.some(voice => voice.id === prev) ? prev : voices[0]?.id || '');
-  };
-
-  const deleteFamilyVoice = (voiceId: string) => {
-    persistFamilyVoices(familyVoices.filter(voice => voice.id !== voiceId));
-  };
-
-  const startVoiceRecording = async () => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setVoiceStudioMessage("Recording is not supported in this browser.");
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      voiceChunksRef.current = [];
-      recorder.ondataavailable = event => {
-        if (event.data.size > 0) voiceChunksRef.current.push(event.data);
-      };
-      recorder.onstop = () => {
-        stream.getTracks().forEach(track => track.stop());
-        const blob = new Blob(voiceChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
-        if (voiceRecordingUrl) URL.revokeObjectURL(voiceRecordingUrl);
-        setVoiceRecordingBlob(blob);
-        setVoiceRecordingUrl(URL.createObjectURL(blob));
-        setVoiceStudioMessage("Sample ready. Listen once, then create the bedtime voice.");
-      };
-
-      voiceMediaRecorderRef.current = recorder;
-      recorder.start();
-      setIsRecordingVoice(true);
-      setVoiceStudioMessage("Recording... read the paragraph in a calm, natural bedtime voice.");
-    } catch (error) {
-      console.error("Voice recording failed:", error);
-      setVoiceStudioMessage("Microphone permission is needed to record a voice sample.");
-    }
-  };
-
-  const stopVoiceRecording = () => {
-    voiceMediaRecorderRef.current?.stop();
-    voiceMediaRecorderRef.current = null;
-    setIsRecordingVoice(false);
-  };
-
-  const clearStoryAudioUrl = () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.removeAttribute('src');
-      audioRef.current.load();
-    }
-    if (storyAudioUrlRef.current) {
-      URL.revokeObjectURL(storyAudioUrlRef.current);
-      storyAudioUrlRef.current = '';
-    }
-  };
-
-  const setStoryAudioUrl = (audioUrl: string | null) => {
-    if (storyAudioUrlRef.current && storyAudioUrlRef.current !== audioUrl) {
-      URL.revokeObjectURL(storyAudioUrlRef.current);
-    }
-    storyAudioUrlRef.current = audioUrl || '';
-    setSelectedStory(prev => prev ? { ...prev, audioUrl } : null);
-  };
-
-  const createFamilyVoice = async () => {
-    if (!voiceRecordingBlob || !voiceName.trim() || !voiceConsent) return;
-
-    setVoiceCloneLoading(true);
-    setVoiceStudioMessage('');
-    try {
-      const formData = new FormData();
-      formData.append('name', voiceName.trim());
-      formData.append('description', 'Private family bedtime narration voice created in Sweetdreams.');
-      formData.append('remove_background_noise', 'true');
-      formData.append('files[]', voiceRecordingBlob, `${voiceName.trim().replace(/\s+/g, '-').toLowerCase()}-sample.webm`);
-
-      const response = await fetch('/api/voice-clone', {
-        method: 'POST',
-        headers: {
-          'X-Voice-Consent': 'confirmed',
-        },
-        body: formData,
-      });
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(data.error || "Unable to create the family voice.");
-      }
-
-      const profile: FamilyVoiceProfile = {
-        id: `${Date.now()}`,
-        voiceId: data.voiceId,
-        name: voiceName.trim(),
-        createdAt: new Date().toISOString(),
-        requiresVerification: Boolean(data.requiresVerification),
-      };
-      persistFamilyVoices([profile, ...familyVoices].slice(0, 5));
-      setSelectedFamilyVoiceId(profile.id);
-      setVoiceRecordingBlob(null);
-      if (voiceRecordingUrl) URL.revokeObjectURL(voiceRecordingUrl);
-      setVoiceRecordingUrl('');
-      setVoiceStudioMessage(data.requiresVerification
-        ? "Voice created, but the provider requires verification before it can narrate."
-        : "Family voice created. Select it in Story Voice before generating a story.");
-    } catch (error) {
-      console.error("Family voice creation failed:", error);
-      setVoiceStudioMessage(error instanceof Error ? error.message : "Unable to create the family voice.");
-    } finally {
-      setVoiceCloneLoading(false);
-    }
   };
 
   const clearNarrationKeepAlive = () => {
@@ -533,7 +375,6 @@ export default function App() {
       if (remaining <= 0) {
         clearSleepTimer();
         stopNarration();
-        audioRef.current?.pause();
         stopAmbient();
         setBgMusicEnabled(false);
       }
@@ -597,11 +438,10 @@ export default function App() {
 
   const openSavedStory = (story: SavedStory) => {
     stopNarration();
-    clearStoryAudioUrl();
     setError('');
     setOptions([]);
     setPrompt(story.prompt);
-    setSelectedStory({ title: story.title, text: story.text, audioUrl: null });
+    setSelectedStory({ title: story.title, text: story.text });
     setIsPlaying(false);
   };
 
@@ -701,18 +541,10 @@ export default function App() {
   };
 
   useEffect(() => () => {
-    voiceMediaRecorderRef.current?.stop();
-    clearStoryAudioUrl();
     stopAmbient();
     clearSleepTimer();
     stopBreathing();
   }, []);
-
-  useEffect(() => {
-    return () => {
-      if (voiceRecordingUrl) URL.revokeObjectURL(voiceRecordingUrl);
-    };
-  }, [voiceRecordingUrl]);
 
   useEffect(() => {
     if (!sleepTimerMinutes) clearSleepTimer();
@@ -795,32 +627,13 @@ export default function App() {
     }
   };
 
-  const createClonedStoryAudio = async (storyText: string, voiceProfile = selectedFamilyVoice) => {
-    if (!voiceProfile || voiceProfile.requiresVerification) return null;
-
-    setAudioLoading(true);
-    try {
-      const audio = await generateStoryAudio(storyText, voiceProfile.voiceId);
-      setStoryAudioUrl(audio);
-      setIsPlaying(Boolean(audio));
-      return audio;
-    } catch (error) {
-      console.error("Cloned narration failed:", error);
-      setError(error instanceof Error ? error.message : "Cloned narration could not be created. Browser read-aloud is still available.");
-      return null;
-    } finally {
-      setAudioLoading(false);
-    }
-  };
-
   const handleSelectStory = async (
     option: StoryOption,
     settings: { autoRead?: boolean; promptText?: string; preferencesOverride?: StoryPreferences } = {},
   ) => {
     stopNarration();
-    clearStoryAudioUrl();
     setLoading(true);
-    setSelectedStory({ title: option.title, text: '', audioUrl: null });
+    setSelectedStory({ title: option.title, text: '' });
 
     const storyPreferences = settings.preferencesOverride || preferences;
     const storyPrompt = settings.promptText || prompt;
@@ -839,12 +652,7 @@ export default function App() {
       saveStory(option.title, fullText, storyPrompt);
       completeRoutineStep('story');
 
-      // Once text is complete, start audio generation in background
-      if (selectedFamilyVoice && !selectedFamilyVoice.requiresVerification) {
-        await createClonedStoryAudio(fullText, selectedFamilyVoice);
-      }
-
-      if (settings.autoRead && !(selectedFamilyVoice && !selectedFamilyVoice.requiresVerification)) {
+      if (settings.autoRead) {
         const handledByNative = await startNativeNarration(fullText);
         if (!handledByNative) {
           startBrowserNarration(fullText);
@@ -1011,31 +819,6 @@ export default function App() {
   const togglePlay = () => {
     if (!selectedStory) return;
 
-    if (selectedFamilyVoice && !selectedStory.audioUrl) {
-      if (selectedFamilyVoice.requiresVerification) {
-        setError("This family voice still needs provider verification before it can narrate.");
-        return;
-      }
-      void createClonedStoryAudio(selectedStory.text);
-      return;
-    }
-
-    if (audioRef.current) {
-      if (isPlaying) {
-        audioRef.current.pause();
-        setIsPlaying(false);
-      } else {
-        audioRef.current.play().catch(e => {
-          console.error("Playback failed:", e);
-          setIsPlaying(false);
-        });
-        setIsPlaying(true);
-        completeRoutineStep('story');
-        startSleepTimerIfNeeded();
-      }
-      return;
-    }
-
     if (isPlaying) {
       stopNarration();
       return;
@@ -1054,29 +837,8 @@ export default function App() {
     }
   }, []);
 
-  // Sync state if audio is paused/played via external means or autoPlay
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    const handlePlay = () => setIsPlaying(true);
-    const handlePause = () => setIsPlaying(false);
-    const handleEnded = () => setIsPlaying(false);
-
-    audio.addEventListener('play', handlePlay);
-    audio.addEventListener('pause', handlePause);
-    audio.addEventListener('ended', handleEnded);
-
-    return () => {
-      audio.removeEventListener('play', handlePlay);
-      audio.removeEventListener('pause', handlePause);
-      audio.removeEventListener('ended', handleEnded);
-    };
-  }, [selectedStory?.audioUrl]);
-
   const reset = () => {
     stopNarration();
-    clearStoryAudioUrl();
     clearSleepTimer();
     stopBreathing();
     setPrompt('');
@@ -1086,45 +848,6 @@ export default function App() {
     setIsPlaying(false);
     setError('');
     setRoutineSteps([]);
-  };
-
-  const toggleVoiceInput = () => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert("Speech recognition is not supported in this browser.");
-      return;
-    }
-
-    if (isListening) {
-      setIsListening(false);
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-
-    recognition.onstart = () => {
-      setIsListening(true);
-    };
-
-    recognition.onresult = (event: any) => {
-      const transcript = event.results[0][0].transcript;
-      setPrompt(prev => prev ? `${prev} ${transcript}` : transcript);
-      setIsListening(false);
-    };
-
-    recognition.onerror = (event: any) => {
-      console.error("Speech recognition error:", event.error);
-      setIsListening(false);
-    };
-
-    recognition.onend = () => {
-      setIsListening(false);
-    };
-
-    recognition.start();
   };
 
   return (
@@ -1196,7 +919,7 @@ export default function App() {
                 <div className="flex items-center justify-between gap-4 text-left">
                   <div>
                     <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-purple-200/70">Or Make Your Own</h2>
-                    <p className="mt-1 text-sm text-purple-200/45">Type or speak an idea, then start the story in one step.</p>
+                    <p className="mt-1 text-sm text-purple-200/45">Type an idea, then start the story in one step.</p>
                   </div>
                   <button
                     type="button"
@@ -1213,22 +936,9 @@ export default function App() {
                     value={prompt}
                     onChange={(e) => setPrompt(e.target.value)}
                     placeholder="A brave kitten exploring the moon..."
-                    className="w-full bg-white/5 border border-white/10 rounded-2xl pl-6 pr-36 py-5 text-lg focus:outline-none focus:ring-2 focus:ring-purple-500/50 transition-all placeholder:text-white/20"
+                    className="w-full bg-white/5 border border-white/10 rounded-2xl pl-6 pr-32 py-5 text-lg focus:outline-none focus:ring-2 focus:ring-purple-500/50 transition-all placeholder:text-white/20"
                   />
                   <div className="absolute right-2 flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={toggleVoiceInput}
-                      className={cn(
-                        "p-3 rounded-xl transition-all",
-                        isListening 
-                          ? "bg-red-500/20 text-red-400 animate-pulse" 
-                          : "text-purple-400 hover:bg-white/5"
-                      )}
-                      title={isListening ? "Stop Listening" : "Speak your story"}
-                    >
-                      {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-                    </button>
                     <button
                       disabled={loading || !prompt.trim()}
                       className="px-6 py-3 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-900/50 disabled:cursor-not-allowed text-white rounded-xl font-medium transition-all flex items-center gap-2 shadow-lg shadow-purple-900/20"
@@ -1331,113 +1041,6 @@ export default function App() {
                       <p className="mt-1 text-sm leading-relaxed text-purple-200/50">{routine.description}</p>
                     </button>
                   ))}
-                </div>
-              </section>
-
-              <section className="w-full max-w-3xl text-left space-y-4">
-                <div className="flex items-center gap-2 text-purple-200/70">
-                  <Mic className="w-4 h-4" />
-                  <h2 className="text-sm font-semibold uppercase tracking-[0.2em]">Family Voice Studio</h2>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
-                  <div className="grid grid-cols-1 gap-5 md:grid-cols-[1fr_1.1fr]">
-                    <div className="space-y-4">
-                      <p className="text-sm leading-relaxed text-purple-100/60">
-                        Record yourself reading this paragraph. With ElevenLabs configured, Sweetdreams can create a private family voice for bedtime narration.
-                      </p>
-                      <div className="rounded-xl border border-purple-300/15 bg-purple-500/10 p-4 font-serif text-lg italic leading-relaxed text-purple-50/80">
-                        {VOICE_SAMPLE_PARAGRAPH}
-                      </div>
-                      {!voiceCloneConfigured && (
-                        <p className="text-xs leading-relaxed text-amber-100/70">
-                          Voice cloning needs `ELEVENLABS_API_KEY` on the server. Until then, browser read-aloud stays active.
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="space-y-3">
-                      <label className="block space-y-2">
-                        <span className="text-xs uppercase tracking-[0.18em] text-purple-200/40">Voice name</span>
-                        <input
-                          type="text"
-                          value={voiceName}
-                          onChange={(e) => setVoiceName(e.target.value)}
-                          className="w-full rounded-xl border border-white/10 bg-[#171126] px-4 py-3 text-sm text-purple-50 focus:outline-none focus:ring-2 focus:ring-purple-500/40"
-                        />
-                      </label>
-
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={isRecordingVoice ? stopVoiceRecording : startVoiceRecording}
-                          className={cn(
-                            "rounded-xl px-4 py-3 text-sm font-semibold transition-colors",
-                            isRecordingVoice
-                              ? "bg-red-500/20 text-red-100 hover:bg-red-500/30"
-                              : "bg-white/10 text-purple-100 hover:bg-white/15"
-                          )}
-                        >
-                          {isRecordingVoice ? "Stop recording" : "Record sample"}
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={createFamilyVoice}
-                          disabled={!voiceCloneConfigured || !voiceRecordingBlob || !voiceName.trim() || !voiceConsent || voiceCloneLoading}
-                          className="rounded-xl bg-purple-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-purple-500 disabled:cursor-not-allowed disabled:bg-purple-900/40 disabled:text-purple-100/40"
-                        >
-                          {voiceCloneLoading ? "Creating..." : "Create voice"}
-                        </button>
-                      </div>
-
-                      {voiceRecordingUrl && (
-                        <audio controls src={voiceRecordingUrl} className="w-full" />
-                      )}
-
-                      <label className="flex items-start gap-3 rounded-xl border border-white/10 bg-black/10 p-3 text-sm text-purple-100/65">
-                        <input
-                          type="checkbox"
-                          checked={voiceConsent}
-                          onChange={(e) => setVoiceConsent(e.target.checked)}
-                          className="mt-1"
-                        />
-                        <span>I confirm this is my own voice, or I have explicit permission to use this voice for private family bedtime narration.</span>
-                      </label>
-
-                      {voiceStudioMessage && (
-                        <p className="text-xs leading-relaxed text-purple-100/55">{voiceStudioMessage}</p>
-                      )}
-
-                      {familyVoices.length > 0 && (
-                        <div className="space-y-2">
-                          <p className="text-xs uppercase tracking-[0.18em] text-purple-200/40">Saved family voices</p>
-                          {familyVoices.map(voice => (
-                            <div key={voice.id} className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] p-2">
-                              <button
-                                type="button"
-                                onClick={() => setSelectedFamilyVoiceId(voice.id)}
-                                className={cn(
-                                  "flex-1 rounded-lg px-3 py-2 text-left text-sm transition-colors",
-                                  selectedFamilyVoiceId === voice.id ? "bg-purple-500/20 text-white" : "text-purple-100/60 hover:bg-white/10"
-                                )}
-                              >
-                                {voice.name}{voice.requiresVerification ? " (verification needed)" : ""}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => deleteFamilyVoice(voice.id)}
-                                title="Remove family voice"
-                                className="rounded-lg p-2 text-purple-200/35 transition-colors hover:bg-white/10 hover:text-red-200"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
                 </div>
               </section>
 
@@ -1563,7 +1166,6 @@ export default function App() {
                 <button 
                   onClick={() => {
                     stopNarration();
-                    clearStoryAudioUrl();
                     setSelectedStory(null);
                   }}
                   className="flex items-center gap-2 text-purple-300/60 hover:text-purple-300 transition-colors"
@@ -1599,27 +1201,8 @@ export default function App() {
                   <div className="text-center mb-12">
                     <h2 className="text-3xl md:text-5xl font-serif text-white mb-4">{selectedStory.title}</h2>
                     <div className="flex items-center justify-center gap-2 text-purple-400/60">
-                      {audioLoading ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          <span className="text-xs uppercase tracking-[0.2em]">Preparing Magical Audio...</span>
-                        </>
-                      ) : selectedStory.audioUrl ? (
-                        <>
-                          <Volume2 className="w-4 h-4" />
-                          <span className="text-xs uppercase tracking-[0.2em]">{selectedFamilyVoice ? `${selectedFamilyVoice.name} Ready` : "Magical Audio Ready"}</span>
-                        </>
-                      ) : selectedFamilyVoice ? (
-                        <>
-                          <Mic className="w-4 h-4" />
-                          <span className="text-xs uppercase tracking-[0.2em]">Family Voice Selected</span>
-                        </>
-                      ) : (
-                        <>
-                          <BookOpen className="w-4 h-4" />
-                          <span className="text-xs uppercase tracking-[0.2em]">Browser Read Aloud Ready</span>
-                        </>
-                      )}
+                      <BookOpen className="w-4 h-4" />
+                      <span className="text-xs uppercase tracking-[0.2em]">On-Device Read Aloud Ready</span>
                     </div>
                   </div>
 
@@ -1678,38 +1261,9 @@ export default function App() {
                         </div>
                         <div className="space-y-3">
                           <select
-                            value={selectedFamilyVoiceId}
-                            onChange={(e) => {
-                              setSelectedFamilyVoiceId(e.target.value);
-                              setStoryAudioUrl(null);
-                              stopNarration();
-                            }}
-                            disabled={isPlaying}
-                            className="w-full rounded-xl border border-white/10 bg-[#171126] px-4 py-3 text-sm text-purple-50 focus:outline-none focus:ring-2 focus:ring-purple-500/40 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            <option value="">Sweetdreams Calm browser voice</option>
-                            {familyVoices.map(voice => (
-                              <option key={voice.id} value={voice.id}>
-                                Family voice: {voice.name}{voice.requiresVerification ? " (verification needed)" : ""}
-                              </option>
-                            ))}
-                          </select>
-
-                          {selectedFamilyVoice && selectedStory.text.trim() && !selectedStory.audioUrl && (
-                            <button
-                              type="button"
-                              onClick={() => createClonedStoryAudio(selectedStory.text)}
-                              disabled={audioLoading || selectedFamilyVoice.requiresVerification}
-                              className="w-full rounded-xl bg-purple-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-purple-500 disabled:cursor-not-allowed disabled:bg-purple-900/40 disabled:text-purple-100/40"
-                            >
-                              {audioLoading ? "Creating cloned audio..." : "Create cloned narration"}
-                            </button>
-                          )}
-
-                          <select
                             value={selectedVoiceURI}
                             onChange={(e) => handleVoiceChange(e.target.value)}
-                            disabled={!availableVoices.length || isPlaying || Boolean(selectedFamilyVoice)}
+                            disabled={!availableVoices.length || isPlaying}
                             className="w-full rounded-xl border border-white/10 bg-[#171126] px-4 py-3 text-sm text-purple-50 focus:outline-none focus:ring-2 focus:ring-purple-500/40 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             {availableVoices.length ? (
@@ -1726,7 +1280,7 @@ export default function App() {
                           <select
                             value={selectedNarrationPresetId}
                             onChange={(e) => handleNarrationPresetChange(e.target.value)}
-                            disabled={isPlaying || Boolean(selectedFamilyVoice)}
+                            disabled={isPlaying}
                             className="w-full rounded-xl border border-white/10 bg-[#171126] px-4 py-3 text-sm text-purple-50 focus:outline-none focus:ring-2 focus:ring-purple-500/40 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             {NARRATION_PRESETS.map(preset => (
@@ -1735,9 +1289,7 @@ export default function App() {
                           </select>
                         </div>
                         <p className="mt-2 text-xs text-purple-200/40">
-                          {selectedFamilyVoice
-                            ? "Family voices use provider-generated audio for a more personal bedtime feel."
-                            : "Sweetdreams Calm uses a slower, softer voice profile with longer pauses for sleep."}
+                          Sweetdreams Calm uses a slower, softer on-device voice profile with longer pauses for sleep.
                         </p>
                       </div>
 
@@ -1823,14 +1375,6 @@ export default function App() {
                       </motion.button>
                     </div>
 
-                    {selectedStory.audioUrl && (
-                      <audio
-                        ref={audioRef}
-                        src={selectedStory.audioUrl}
-                        onEnded={() => setIsPlaying(false)}
-                        autoPlay
-                      />
-                    )}
                   </div>
                 </div>
               </div>
