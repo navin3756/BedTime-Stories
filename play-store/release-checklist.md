@@ -22,7 +22,8 @@
 - Complete Data Safety form.
 - Complete Target audience and content questionnaire.
 - Complete IARC content rating questionnaire.
-- Declare microphone/audio recording use because Family Voice Studio can record a consented voice sample.
+- Confirm Data Safety states that prompts and stories stay on the device.
+- Confirm the app declares no microphone permission and Android backup is disabled.
 - If you position the app for children, review Families policy carefully before production.
 
 ## Recommended rollout

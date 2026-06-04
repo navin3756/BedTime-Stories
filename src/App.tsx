@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Sparkles, Moon, Play, Pause, RotateCcw, ArrowLeft, Loader2, Volume2, Music, CloudRain, Trees, Stars, BookOpen, Trash2, Timer, Heart, CheckCircle2, Circle, Wind } from 'lucide-react';
-import { generateStoryOptions, generateFullStoryStream, getLocalLlmLabel, isCloudStoryProviderConfigured, StoryOption, StoryPreferences } from './services/storyEngine';
+import { generateStoryOptions, generateFullStoryStream, isStorySafetyRefusal, StoryOption, StoryPreferences } from './services/storyEngine';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
@@ -170,7 +170,9 @@ function voiceScore(voice: SpeechSynthesisVoice): number {
 }
 
 function sortVoicesForBedtime(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice[] {
-  return [...voices].sort((a, b) => voiceScore(b) - voiceScore(a) || a.name.localeCompare(b.name));
+  return voices
+    .filter(voice => voice.localService)
+    .sort((a, b) => voiceScore(b) - voiceScore(a) || a.name.localeCompare(b.name));
 }
 
 function isAndroidSpeechRuntime(): boolean {
@@ -244,6 +246,7 @@ export default function App() {
   const [error, setError] = useState('');
   const [options, setOptions] = useState<StoryOption[]>([]);
   const [selectedStory, setSelectedStory] = useState<{ title: string; text: string } | null>(null);
+  const [storyOrigin, setStoryOrigin] = useState<'landing' | 'options'>('landing');
   const [savedStories, setSavedStories] = useState<SavedStory[]>([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [bgMusicEnabled, setBgMusicEnabled] = useState(false);
@@ -263,6 +266,7 @@ export default function App() {
   const narrationKeepAliveRef = useRef<number | null>(null);
   const narrationSessionRef = useRef(0);
   const narrationStopRequestedRef = useRef(false);
+  const generationAbortRef = useRef<AbortController | null>(null);
   const sleepTimerIntervalRef = useRef<number | null>(null);
   const sleepTimerEndRef = useRef<number | null>(null);
   const breathingIntervalRef = useRef<number | null>(null);
@@ -271,9 +275,6 @@ export default function App() {
   const selectedVoice = availableVoices.find(voice => voice.voiceURI === selectedVoiceURI) || null;
   const selectedNarrationPreset = NARRATION_PRESETS.find(preset => preset.id === selectedNarrationPresetId) || NARRATION_PRESETS[0];
   const selectedRoutine = ROUTINE_PRESETS.find(routine => routine.id === selectedRoutineId) || ROUTINE_PRESETS[0];
-  const hasCloudProvider = isCloudStoryProviderConfigured();
-  const localLlmLabel = getLocalLlmLabel();
-
   useEffect(() => {
     try {
       const rawStories = window.localStorage.getItem(STORY_LIBRARY_KEY);
@@ -440,6 +441,7 @@ export default function App() {
     stopNarration();
     setError('');
     setOptions([]);
+    setStoryOrigin('landing');
     setPrompt(story.prompt);
     setSelectedStory({ title: story.title, text: story.text });
     setIsPlaying(false);
@@ -591,7 +593,7 @@ export default function App() {
         setError("No story ideas came back. Try a little more detail in the prompt.");
       }
     } catch (error) {
-      console.error("Error generating options:", error);
+      if (!isStorySafetyRefusal(error)) console.error("Error generating options:", error);
       setError(error instanceof Error ? error.message : "We couldn't create story ideas. Please try again.");
     } finally {
       setLoading(false);
@@ -620,7 +622,7 @@ export default function App() {
       }
       await handleSelectStory(firstOption, { autoRead: true, promptText: customPrompt });
     } catch (error) {
-      console.error("Error starting story:", error);
+      if (!isStorySafetyRefusal(error)) console.error("Error starting story:", error);
       setError(error instanceof Error ? error.message : "We couldn't start that story. Please try again.");
     } finally {
       setLoading(false);
@@ -631,8 +633,12 @@ export default function App() {
     option: StoryOption,
     settings: { autoRead?: boolean; promptText?: string; preferencesOverride?: StoryPreferences } = {},
   ) => {
+    generationAbortRef.current?.abort();
+    const generationController = new AbortController();
+    generationAbortRef.current = generationController;
     stopNarration();
     setLoading(true);
+    setStoryOrigin(options.length > 0 ? 'options' : 'landing');
     setSelectedStory({ title: option.title, text: '' });
 
     const storyPreferences = settings.preferencesOverride || preferences;
@@ -641,14 +647,14 @@ export default function App() {
     let fullText = '';
     try {
       setError('');
-      const stream = generateFullStoryStream(option.title, option.summary, storyPreferences);
-      setLoading(false); // Stop main loading as we start streaming text
-
+      const stream = generateFullStoryStream(option.title, option.summary, storyPreferences, generationController.signal);
       for await (const chunk of stream) {
+        if (generationController.signal.aborted) return;
         fullText += chunk;
         setSelectedStory(prev => prev ? { ...prev, text: fullText } : null);
       }
 
+      if (generationController.signal.aborted) return;
       saveStory(option.title, fullText, storyPrompt);
       completeRoutineStep('story');
 
@@ -659,9 +665,13 @@ export default function App() {
         }
       }
     } catch (error) {
-      console.error("Error generating story:", error);
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      if (!isStorySafetyRefusal(error)) console.error("Error generating story:", error);
       setError(error instanceof Error ? error.message : "The story could not be completed. Please try again.");
     } finally {
+      if (generationAbortRef.current === generationController) {
+        generationAbortRef.current = null;
+      }
       setLoading(false);
     }
   };
@@ -671,6 +681,7 @@ export default function App() {
     setPrompt(idea.prompt);
     setPreferences(quickPreferences);
     setOptions([]);
+    setStoryOrigin('landing');
     await handleSelectStory(idea, {
       autoRead: true,
       promptText: idea.prompt,
@@ -711,6 +722,11 @@ export default function App() {
 
     if (!storyText.trim()) return;
 
+    if (!selectedVoice) {
+      setError("A private on-device voice is not available in this browser. You can still read the story on screen.");
+      return;
+    }
+
     stopNarration();
     narrationStopRequestedRef.current = false;
     const narrationSessionId = narrationSessionRef.current;
@@ -721,8 +737,6 @@ export default function App() {
     const segments = splitNarrationText(storyText);
     let index = 0;
     const narrationSettings = getBrowserNarrationSettings(selectedNarrationPreset);
-    const shouldUseAndroidFallback = isAndroidSpeechRuntime();
-
     clearNarrationKeepAlive();
     narrationKeepAliveRef.current = window.setInterval(() => {
       if (
@@ -754,7 +768,7 @@ export default function App() {
       setError(message);
     };
 
-    const speakNext = (useDefaultVoice = false, retryCount = 0) => {
+    const speakNext = () => {
       if (narrationStopRequestedRef.current || narrationSessionId !== narrationSessionRef.current) {
         return;
       }
@@ -766,12 +780,8 @@ export default function App() {
       }
 
       const narration = new SpeechSynthesisUtterance(segment);
-      if (selectedVoice && !useDefaultVoice) {
-        narration.voice = selectedVoice;
-        narration.lang = selectedVoice.lang;
-      } else {
-        narration.lang = 'en-US';
-      }
+      narration.voice = selectedVoice;
+      narration.lang = selectedVoice.lang;
       narration.rate = narrationSettings.rate;
       narration.pitch = narrationSettings.pitch;
       narration.volume = narrationSettings.volume;
@@ -780,7 +790,7 @@ export default function App() {
           return;
         }
         index += 1;
-        narrationTimeoutRef.current = window.setTimeout(() => speakNext(false, 0), narrationSettings.pauseMs);
+        narrationTimeoutRef.current = window.setTimeout(speakNext, narrationSettings.pauseMs);
       };
       narration.onerror = (event) => {
         if (
@@ -793,15 +803,6 @@ export default function App() {
         }
 
         console.warn("Browser read-aloud error:", event.error);
-
-        if (shouldUseAndroidFallback && retryCount < 1) {
-          narrationRef.current = null;
-          if ('speechSynthesis' in window) {
-            window.speechSynthesis.cancel();
-          }
-          narrationTimeoutRef.current = window.setTimeout(() => speakNext(true, retryCount + 1), 250);
-          return;
-        }
 
         failNarration("Read aloud stopped unexpectedly. Try another voice, or read the story on screen.");
       };
@@ -833,16 +834,22 @@ export default function App() {
 
   useEffect(() => {
     return () => {
+      generationAbortRef.current?.abort();
+      clearNarrationKeepAlive();
+      if (narrationTimeoutRef.current) window.clearTimeout(narrationTimeoutRef.current);
       window.speechSynthesis?.cancel();
+      if (canUseNativeTts()) void NativeTts.stop();
     }
   }, []);
 
   const reset = () => {
+    generationAbortRef.current?.abort();
     stopNarration();
     clearSleepTimer();
     stopBreathing();
     setPrompt('');
     setPreferences(DEFAULT_PREFERENCES);
+    setSelectedRoutineId('sleepy-reset');
     setOptions([]);
     setSelectedStory(null);
     setIsPlaying(false);
@@ -870,12 +877,16 @@ export default function App() {
               className="flex-1 flex flex-col items-center justify-center text-center space-y-8"
             >
               <div className="space-y-4">
-                <motion.div 
+                <motion.div
                   animate={{ rotate: [0, 10, -10, 0] }}
                   transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}
-                  className="inline-block p-4 bg-purple-500/10 rounded-full border border-purple-500/20 mb-4"
+                  className="inline-block mb-4"
                 >
-                  <Moon className="w-12 h-12 text-purple-400" />
+                  <img
+                    src="/app-logo.png"
+                    alt="Sweetdreams crescent moon and storybook"
+                    className="h-28 w-28 rounded-[28px] shadow-2xl shadow-purple-950/40 md:h-32 md:w-32"
+                  />
                 </motion.div>
                 <h1 className="text-5xl md:text-7xl font-serif font-light tracking-tight text-white">
                   Sweetdreams
@@ -1050,11 +1061,9 @@ export default function App() {
                 </div>
               )}
 
-              {!hasCloudProvider && (
-                <p className="max-w-2xl text-sm text-purple-200/45">
-                  Local mode is on: the app uses {localLlmLabel} through Ollama when a model is installed, then falls back to built-in story generation. Browser read-aloud works without any API key.
-                </p>
-              )}
+              <p className="max-w-2xl text-sm text-purple-200/45">
+                Private by design: stories are composed on this device with no API key, no account, and no prompt upload.
+              </p>
 
               {savedStories.length > 0 && (
                 <section className="w-full max-w-3xl text-left space-y-4 pt-4">
@@ -1165,13 +1174,14 @@ export default function App() {
               <div className="flex items-center justify-between">
                 <button 
                   onClick={() => {
+                    generationAbortRef.current?.abort();
                     stopNarration();
                     setSelectedStory(null);
                   }}
                   className="flex items-center gap-2 text-purple-300/60 hover:text-purple-300 transition-colors"
                 >
                   <ArrowLeft className="w-4 h-4" />
-                  <span>Back to options</span>
+                  <span>{storyOrigin === 'options' ? 'Back to options' : 'Back to stories'}</span>
                 </button>
                 <div className="flex items-center gap-4">
                   <button 
@@ -1202,7 +1212,9 @@ export default function App() {
                     <h2 className="text-3xl md:text-5xl font-serif text-white mb-4">{selectedStory.title}</h2>
                     <div className="flex items-center justify-center gap-2 text-purple-400/60">
                       <BookOpen className="w-4 h-4" />
-                      <span className="text-xs uppercase tracking-[0.2em]">On-Device Read Aloud Ready</span>
+                      <span className="text-xs uppercase tracking-[0.2em]">
+                        {loading ? 'Weaving On This Device' : 'On-Device Read Aloud Ready'}
+                      </span>
                     </div>
                   </div>
 
@@ -1273,7 +1285,7 @@ export default function App() {
                                 </option>
                               ))
                             ) : (
-                              <option>Default browser voice</option>
+                              <option>No private on-device voice found</option>
                             )}
                           </select>
 
@@ -1289,7 +1301,7 @@ export default function App() {
                           </select>
                         </div>
                         <p className="mt-2 text-xs text-purple-200/40">
-                          Sweetdreams Calm uses a slower, softer on-device voice profile with longer pauses for sleep.
+                          Only private on-device voices are listed. Sweetdreams Calm uses a slower, softer profile with longer pauses for sleep.
                         </p>
                       </div>
 
@@ -1357,12 +1369,12 @@ export default function App() {
                         whileHover={{ scale: 1.1 }}
                         whileTap={{ scale: 0.9 }}
                         onClick={togglePlay}
-                        disabled={!selectedStory.text.trim()}
+                        disabled={loading || !selectedStory.text.trim()}
                         aria-label={isPlaying ? "Pause story narration" : "Play story narration"}
                         title={isPlaying ? "Pause story narration" : "Play story narration"}
                         className={cn(
                           "w-20 h-20 rounded-full flex items-center justify-center shadow-2xl transition-all",
-                          selectedStory.text.trim()
+                          selectedStory.text.trim() && !loading
                             ? "bg-purple-600 hover:bg-purple-500 shadow-purple-900/40" 
                             : "bg-purple-900/30 cursor-not-allowed opacity-50"
                         )}

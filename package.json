@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
+    "test:mvp": "tsx scripts/mvp-acceptance.ts",
     "android:sync": "npm run build && npx cap sync",
     "android:open": "npx cap open android",
     "android:install": "powershell -ExecutionPolicy Bypass -File scripts/android-install-debug.ps1",

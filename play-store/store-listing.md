@@ -19,13 +19,13 @@ Features:
 - Soft read-aloud narration tuned for bedtime.
 - Manual background music and sleep sounds.
 - Sleep timer and calm wind-down routine options.
-- Optional Family Voice Studio for consent-based personal bedtime voices when configured.
+- Private on-device story composition with no account or API key.
 
 Sweetdreams is designed for peaceful bedtime routines. Stories avoid scary conflict and focus on comfort, imagination, reassurance, and rest.
 
 ## Release notes
 
-Initial Android release of Sweetdreams Bedtime Stories with preloaded story ideas, custom story creation, native Android read-aloud, calming narration presets, background sounds, and sleep timer support.
+Adds a new moon-and-storybook logo, more relevant and varied offline stories, stronger child-safety refusals, private on-device voices, and stability improvements.
 
 ## Suggested category
 

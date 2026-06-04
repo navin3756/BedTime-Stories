@@ -13,169 +13,289 @@ export interface StoryPreferences {
   companion: string;
 }
 
-interface OllamaModel {
-  name: string;
+interface StoryWorld {
+  id: string;
+  keywords: string[];
+  place: string;
+  sights: string[];
+  sounds: string[];
+  tasks: string[];
+  treasures: string[];
 }
 
-interface OllamaTagsResponse {
-  models?: OllamaModel[];
-}
+const GENERAL_HARM_REFUSAL = "I can't use that idea for a child's bedtime story. Let's make it gentle and safe, with no one getting hurt. Try friendship, animals, nature, or a magical helper.";
+const IDENTITY_OR_ADULT_REFUSAL = "I can't make a children's story with adult content or unkindness toward people because of who they are. Let's choose friendship, respect, or a magical adventure instead.";
+const SUPPORTIVE_REFUSAL = "I can't turn that into a bedtime story. If this is about you or someone you know, please tell a trusted grown-up now. We can make a gentle story about getting help and feeling safe.";
 
-interface OllamaGenerateResponse {
-  response?: string;
-  done?: boolean;
-}
+const SELF_HARM_OR_ABUSE_PATTERNS: RegExp[] = [
+  /\b(suicid(?:e|al)|self[- ]?harm(?:ing)?|cut(?:ting)? myself|hurt(?:ing)? (?:myself|themself|themselves)|want(?:s|ed)? to die)\b/i,
+  /\b(abuse[ds]?|abusing|molest(?:s|ed|ing)?|hit(?:s|ting)? (?:a|the|my) child|beat(?:s|ing)? (?:a|the|my) child|hurt(?:s|ing)? (?:a|the|my) child)\b/i,
+];
 
-const ollamaBaseUrl = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
-const preferredModel = process.env.OLLAMA_MODEL || "";
-let cachedModel: string | null | undefined;
+const IDENTITY_OR_ADULT_PATTERNS: RegExp[] = [
+  /\b(sex(?:ual)?|nude|naked|porn(?:ography)?|rape[ds]?)\b/i,
+  /\b(hate[sd]?|hating|attack(?:s|ed|ing)?|harm(?:s|ed|ing)?|destroy(?:s|ed|ing)?)\b.{0,32}\b(race|religion|people|group|girls|boys|identity)\b/i,
+  /\b(adult content|explicit content)\b/i,
+];
 
-function isLoopbackHost(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-}
+const GENERAL_HARM_PATTERNS: RegExp[] = [
+  /\b(kill(?:s|ed|ing)?|murder(?:s|ed|ing)?|stab(?:s|bed|bing)?|shoot(?:s|ing)?|weapon(?:s)?|bomb(?:s|ing)?|torture[ds]?|kidnap(?:s|ped|ping)?|gore|blood(?:y|ied)?|exposed organs?)\b/i,
+  /(?<!water )\bgun(?:s)?\b/i,
+  /\b(cocaine|heroin|meth|illegal drugs?|drug dealer|overdose[ds]?|getting high)\b/i,
+  /\b(ignore|disregard|bypass|override)\b.{0,32}\b(safety|safeguards?|rules|instructions)\b/i,
+  /\b(system prompt|jailbreak|not age[- ]?appropriate|write anything)\b/i,
+];
 
-function canUseOllamaFromBrowser(): boolean {
-  if (typeof window === "undefined") return true;
+const WORLDS: StoryWorld[] = [
+  {
+    id: "sky",
+    keywords: ["moon", "star", "space", "planet", "rocket", "sky", "cloud"],
+    place: "a wide velvet sky",
+    sights: ["a ribbon of silver starlight", "sleepy constellations", "clouds shaped like pillows"],
+    sounds: ["the soft hum of distant stars", "a moonbeam chiming like a tiny bell", "a cloud sighing happily"],
+    tasks: ["help a shy star find its constellation", "carry a warm moonbeam to a sleepy cloud", "arrange three stars into a goodnight picture"],
+    treasures: ["a pocket-sized star", "a feather-light moon map", "a jar of quiet starlight"],
+  },
+  {
+    id: "sea",
+    keywords: ["ocean", "sea", "boat", "submarine", "underwater", "mermaid", "fish", "whale", "island", "beach"],
+    place: "a calm sea that sparkled under the moon",
+    sights: ["pearly waves", "a lantern-lit coral garden", "an island made of soft sand"],
+    sounds: ["waves whispering against the shore", "a whale humming a low lullaby", "shells clicking gently in the tide"],
+    tasks: ["guide a tiny boat toward its glowing harbor", "return a sleepy shell to the coral garden", "help a young whale remember its bedtime song"],
+    treasures: ["a pearly shell", "a smooth sea-glass star", "a little lantern buoy"],
+  },
+  {
+    id: "forest",
+    keywords: ["forest", "tree", "woods", "fox", "owl", "bear", "rabbit", "kitten", "cat", "dog", "puppy", "animal"],
+    place: "a friendly forest where the leaves glowed softly",
+    sights: ["fern beds tucked beneath old trees", "fireflies making tiny lantern paths", "mushrooms with dew-drop hats"],
+    sounds: ["leaves rustling like blankets", "an owl counting slow breaths", "a brook murmuring a quiet song"],
+    tasks: ["help a little friend find the coziest sleeping nook", "deliver a goodnight wish to the oldest tree", "follow the fireflies to a moonlit meadow"],
+    treasures: ["a firefly lantern", "a smooth acorn charm", "a leaf shaped like a tiny heart"],
+  },
+  {
+    id: "kingdom",
+    keywords: ["dragon", "castle", "princess", "prince", "knight", "fairy", "unicorn", "magic"],
+    place: "a peaceful kingdom beyond the pillow hills",
+    sights: ["a castle with glowing windows", "a garden of bell-shaped flowers", "a gentle dragon folding its wings"],
+    sounds: ["banners fluttering in the evening breeze", "a fountain singing softly", "tiny bells from the fairy garden"],
+    tasks: ["help a gentle dragon prepare the castle for bedtime", "find the missing star for the royal night-light", "carry a kindness note across the moonlit garden"],
+    treasures: ["a soft golden crown", "a friendly dragon scale", "a wand that only makes cozy light"],
+  },
+  {
+    id: "journey",
+    keywords: ["train", "car", "bus", "plane", "travel", "journey", "road"],
+    place: "a quiet road that curved through the sleeping countryside",
+    sights: ["lanterns glowing beside the path", "hills wearing blankets of mist", "a station clock blinking sleepily"],
+    sounds: ["wheels making a gentle click-clack", "the breeze humming through open fields", "a faraway whistle saying goodnight"],
+    tasks: ["bring a bundle of dreams to the last little station", "help a sleepy traveler find the way home", "collect goodnight wishes from each quiet stop"],
+    treasures: ["a silver ticket", "a tiny compass that points toward home", "a warm lantern for the journey"],
+  },
+  {
+    id: "dinosaur",
+    keywords: ["dinosaur", "dino", "t-rex", "triceratops"],
+    place: "a fern-covered valley beneath a lavender sunset",
+    sights: ["giant leaves beaded with dew", "a warm nest beside the hill", "long-necked dinosaurs moving like clouds"],
+    sounds: ["ferns swishing in the breeze", "a baby dinosaur making a tiny yawn", "the valley echoing a slow goodnight"],
+    tasks: ["help a baby dinosaur find the softest leaves for its nest", "carry a bedtime song across the valley", "follow gentle footprints to a warm family cuddle"],
+    treasures: ["a smooth speckled pebble", "a fern-shaped bookmark", "a tiny fossil star"],
+  },
+  {
+    id: "library",
+    keywords: ["book", "library", "story", "letter", "school"],
+    place: "a floating library where every book felt warm",
+    sights: ["shelves curving like rainbows", "pages glowing with quiet pictures", "a reading nook made of clouds"],
+    sounds: ["pages turning by themselves", "a pencil scribbling a kind note", "books whispering their last line"],
+    tasks: ["help a lost story find its happy ending", "return a sleepy book to its favorite shelf", "choose a gentle chapter for the moon"],
+    treasures: ["a bookmark made of starlight", "a tiny book of brave thoughts", "a silver library card"],
+  },
+  {
+    id: "garden",
+    keywords: [],
+    place: "a moonlit garden hidden just beyond bedtime",
+    sights: ["flowers glowing like little lamps", "a path of soft silver stones", "butterflies resting beneath leaves"],
+    sounds: ["petals brushing in the breeze", "a fountain making a sleepy rhythm", "crickets playing a quiet lullaby"],
+    tasks: ["help the garden gather its last goodnight wishes", "find a glowing flower for the bedside table", "follow a silver path toward a cozy surprise"],
+    treasures: ["a glowing flower", "a ribbon of moonlight", "a seed filled with tomorrow's hope"],
+  },
+];
 
-  try {
-    const appIsLocal = isLoopbackHost(window.location.hostname);
-    const ollamaIsLocal = isLoopbackHost(new URL(ollamaBaseUrl).hostname);
-    return appIsLocal || !ollamaIsLocal;
-  } catch {
-    return false;
+const OPTION_STYLES = [
+  { id: "path", titlePrefix: "The Moonlit Path to", opening: "A gentle journey" },
+  { id: "star", titlePrefix: "The Little Star and", opening: "A kind new friend" },
+  { id: "wish", titlePrefix: "The Goodnight Wish of", opening: "A cozy mystery" },
+];
+
+function hashText(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
   }
+  return hash >>> 0;
 }
 
-export function isCloudStoryProviderConfigured(): boolean {
-  return false;
+function pick<T>(items: T[], seed: number, offset = 0): T {
+  return items[(seed + offset) % items.length];
 }
 
-export function getLocalLlmLabel(): string {
-  return preferredModel || "an installed Ollama model";
+function cleanInput(value: string, maxLength = 120): string {
+  return value.trim().replace(/\s+/g, " ").replace(/[<>]/g, "").slice(0, maxLength);
 }
 
-async function getOllamaModel(): Promise<string | null> {
-  if (cachedModel !== undefined) return cachedModel;
-
-  if (!canUseOllamaFromBrowser()) {
-    cachedModel = null;
-    return cachedModel;
-  }
-
-  try {
-    const response = await fetch(`${ollamaBaseUrl}/api/tags`);
-    if (!response.ok) {
-      cachedModel = null;
-      return cachedModel;
-    }
-
-    const data = await response.json() as OllamaTagsResponse;
-    const models = data.models ?? [];
-    cachedModel = models.find(model => model.name === preferredModel)?.name
-      ?? models.find(model => model.name.includes("llama"))?.name
-      ?? models.find(model => model.name.includes("qwen"))?.name
-      ?? models[0]?.name
-      ?? null;
-    return cachedModel;
-  } catch {
-    cachedModel = null;
-    return cachedModel;
-  }
+function titleCase(value: string): string {
+  return value
+    .split(" ")
+    .slice(0, 7)
+    .map(word => word ? word[0].toUpperCase() + word.slice(1).toLowerCase() : "")
+    .join(" ");
 }
 
-function preferenceContext(preferences: StoryPreferences): string {
-  const childName = preferences.childName.trim();
-  const companion = preferences.companion.trim();
-  return [
-    childName ? `The child's name is ${childName}.` : "",
-    `Target age range: ${preferences.ageRange}.`,
-    `Story mood: ${preferences.mood}.`,
-    `Desired length: ${preferences.length}.`,
-    `Bedtime focus: ${preferences.comfortFocus}.`,
-    companion ? `Include this favorite companion as a gentle helper: ${companion}.` : "",
-  ].filter(Boolean).join(" ");
+function ideaLabel(prompt: string): string {
+  const cleaned = cleanInput(prompt).replace(/[.!?]+$/, "");
+  return cleaned || "A Little Dream";
 }
 
-function firstPromptIdea(prompt: string): string {
-  return prompt.trim().replace(/[.!?]+$/, "") || "a little dream";
+function summaryIdea(summary: string): string {
+  const match = summary.match(/inspired by (.*?):/i);
+  return ideaLabel(match?.[1] || summary);
+}
+
+function chooseWorld(prompt: string): StoryWorld {
+  const lower = prompt.toLowerCase();
+  return WORLDS.find(world => world.keywords.some(keyword => lower.includes(keyword))) || WORLDS[WORLDS.length - 1];
 }
 
 function childReference(preferences: StoryPreferences): string {
-  return preferences.childName.trim() || "the little dreamer";
+  return cleanInput(preferences.childName, 40) || "the little dreamer";
 }
 
-function titleChildReference(preferences: StoryPreferences): string {
-  return preferences.childName.trim() || "Little Dreamer";
-}
-
-function sentenceStartChildReference(preferences: StoryPreferences): string {
-  return preferences.childName.trim() || "The little dreamer";
-}
-
-function localStoryOptions(prompt: string, preferences: StoryPreferences): StoryOption[] {
-  const idea = firstPromptIdea(prompt);
-  const sentenceChild = sentenceStartChildReference(preferences);
-  const titleChild = titleChildReference(preferences);
-  const gentleMood = preferences.mood.split(" and ")[0] || "gentle";
-  const companion = preferences.companion.trim() || "a tiny lantern friend";
-  const focus = preferences.comfortFocus || "falling asleep peacefully";
-
-  return [
-    {
-      id: "local-moon-path",
-      title: `The Moonlit Path of ${titleChild}`,
-      summary: `${sentenceChild} follows a silver trail through a ${gentleMood} world inspired by ${idea}, with ${companion} helping them practice ${focus}.`,
-    },
-    {
-      id: "local-pocket-star",
-      title: "The Pocket-Sized Star",
-      summary: `A tiny star asks for help with ${idea}, leading to a quiet adventure with ${companion}, warm lights, and a sleepy goodnight about ${focus}.`,
-    },
-    {
-      id: "local-cloud-library",
-      title: "The Cloud Library",
-      summary: `${sentenceChild} visits a floating library where every cloud whispers a peaceful chapter about ${idea}, ${focus}, and feeling safe.`,
-    },
-  ];
-}
-
-function localStoryText(title: string, summary: string, preferences: StoryPreferences): string {
+function sentenceChildReference(preferences: StoryPreferences): string {
   const child = childReference(preferences);
-  const companion = preferences.companion.trim() || "a small glowing friend";
+  return child === "the little dreamer" ? "The little dreamer" : child;
+}
+
+function companionReference(preferences: StoryPreferences): string {
+  return cleanInput(preferences.companion, 50) || "a tiny lantern friend";
+}
+
+function sentenceStart(value: string): string {
+  return value ? value[0].toUpperCase() + value.slice(1) : value;
+}
+
+function lengthParagraphs(preferences: StoryPreferences): number {
+  if (preferences.ageRange === "2-3") return 1;
+  if (preferences.length.startsWith("tiny")) return 1;
+  if (preferences.length.startsWith("longer")) return 3;
+  return 2;
+}
+
+export function validateStoryIdea(prompt: string, preferences?: Partial<StoryPreferences>): void {
+  const values = [prompt, preferences?.childName || "", preferences?.companion || ""];
+  if (values.some(value => SELF_HARM_OR_ABUSE_PATTERNS.some(pattern => pattern.test(value)))) throw new Error(SUPPORTIVE_REFUSAL);
+  if (values.some(value => IDENTITY_OR_ADULT_PATTERNS.some(pattern => pattern.test(value)))) throw new Error(IDENTITY_OR_ADULT_REFUSAL);
+  if (values.some(value => GENERAL_HARM_PATTERNS.some(pattern => pattern.test(value)))) throw new Error(GENERAL_HARM_REFUSAL);
+}
+
+export function isStorySafetyRefusal(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return [GENERAL_HARM_REFUSAL, IDENTITY_OR_ADULT_REFUSAL, SUPPORTIVE_REFUSAL].includes(error.message);
+}
+
+export function generateLocalStoryText(title: string, summary: string, preferences: StoryPreferences): string {
+  validateStoryIdea(`${title} ${summary}`, preferences);
+
+  const child = childReference(preferences);
+  const sentenceChild = sentenceChildReference(preferences);
+  const companion = companionReference(preferences);
+  const sentenceCompanion = sentenceStart(companion);
+  const world = chooseWorld(summary);
+  const seed = hashText(`${title}|${summary}|${preferences.ageRange}|${preferences.mood}|${preferences.comfortFocus}`);
+  const sight = pick(world.sights, seed, 1);
+  const secondSight = pick(world.sights, seed, 2);
+  const sound = pick(world.sounds, seed, 3);
+  const task = pick(world.tasks, seed, 4);
+  const treasure = pick(world.treasures, seed, 5);
   const focus = preferences.comfortFocus || "falling asleep peacefully";
-  const lengthHint = preferences.length.startsWith("tiny") ? "tiny" : preferences.length.startsWith("longer") ? "longer" : "short";
-  const extraMoment = lengthHint === "longer"
-    ? `\n\nThey paused beside a little lantern pond, where each ripple showed a happy memory from the day. ${companion} helped ${child} choose the calmest one and tuck it carefully into an imaginary pocket for tomorrow.`
-    : "";
+  const extraCount = lengthParagraphs(preferences);
+  const isToddler = preferences.ageRange === "2-3";
+  const safeWords = isToddler
+    ? `"Safe and loved," the night seemed to say.`
+    : `every gentle sound seemed to say, "You are safe. You are loved. You have plenty of time."`;
+
+  const extraParagraphs = [
+    isToddler
+      ? `${sentenceChild} and ${companion} went slowly. They saw ${secondSight}. They listened to ${sound}.`
+      : `${sentenceChild} and ${companion} took their time. They noticed ${secondSight}, listened to ${sound}, and discovered that the whole world became easier to understand when nobody hurried.`,
+    `At a quiet resting place, ${companion} invited ${child} to breathe in slowly, as if smelling a favorite flower, and breathe out gently, as if cooling a warm cup of cocoa. They did this three times, and each breath made the night feel softer.`,
+    `Before leaving, they shared one kind thought about the day and tucked one hopeful thought away for tomorrow. The path seemed to glow a little brighter, pleased to be trusted with both.`,
+  ].slice(0, extraCount);
 
   return `${title}
 
-Once, when the room was quiet and the stars were just beginning to blink, ${child} discovered that bedtime had a secret door.
+Once, when the room was quiet and the stars were beginning to blink, ${child} discovered a small door made of moonlight.
 
-The door was made of soft moonlight and opened with a whisper. On the other side was a gentle place where ${summary.charAt(0).toLowerCase()}${summary.slice(1)}
+On the other side was ${world.place}. It was inspired by ${summaryIdea(summary).toLowerCase()}, and there was ${sight} waiting nearby. ${sentenceCompanion} waved hello and explained that tonight they would ${task}.
 
-Every step felt safe. Every sound was kind. A sleepy breeze carried the smell of warm blankets, and the path glowed just enough to show the way. When ${child} felt unsure, ${companion} floated close and hummed, "You are exactly where you need to be."
+Nothing in this place was rushed or scary. ${sentenceChild} could hear ${sound}. ${sentenceStart(safeWords)}
 
-Together, they wandered past pillow hills, silver leaves, and windows full of cozy dreams. The world did not rush them. It waited patiently, as all good bedtime worlds do. Each quiet step made ${focus} feel a little easier.${extraMoment}
+${extraParagraphs.join("\n\n")}
 
-At last, the moon lowered a ladder of light back home. ${child} climbed down slowly, carrying a peaceful feeling in both hands.
+Together they completed their quiet task. As a thank-you, the bedtime world gave ${child} ${treasure}. It was not a treasure to keep in a pocket, but a reminder that ${focus} could begin with one slow breath and one kind thought.
 
-Back under the blankets, the secret door became a tiny sparkle on the wall. It promised to stay nearby all night, watching softly until morning.
+At last, a moonbeam showed the way home. ${sentenceChild} climbed back beneath the blankets, while ${companion} promised to stay close in every cozy dream.
 
-And with one deep breath, one small smile, and one last twinkle, ${child} drifted into a calm and happy sleep.`;
+The moonlight door became a tiny sparkle on the wall. ${sentenceChild} took one deep breath, let the day grow still, and drifted into a calm and happy sleep.`;
 }
 
-function storyTokenLimit(preferences: StoryPreferences): number {
-  if (preferences.length.startsWith("tiny")) return 360;
-  if (preferences.length.startsWith("longer")) return 900;
-  return 640;
+function localStoryOptions(prompt: string, preferences: StoryPreferences): StoryOption[] {
+  validateStoryIdea(prompt, preferences);
+
+  const idea = ideaLabel(prompt);
+  const titleIdea = titleCase(idea);
+  const sentenceChild = sentenceChildReference(preferences);
+  const companion = companionReference(preferences);
+  const world = chooseWorld(prompt);
+  const seed = hashText(`${prompt}|${preferences.mood}|${preferences.comfortFocus}|${preferences.companion}`);
+
+  return OPTION_STYLES.map((style, index) => {
+    const task = pick(world.tasks, seed, index);
+    const sight = pick(world.sights, seed, index + 2);
+    const title = index === 1
+      ? `${style.titlePrefix} ${titleIdea}`
+      : `${style.titlePrefix} ${titleIdea}`;
+
+    return {
+      id: `offline-${world.id}-${style.id}-${seed}`,
+      title,
+      summary: `${style.opening} inspired by ${idea}: ${sentenceChild} and ${companion} visit ${world.place}, notice ${sight}, and ${task} while practicing ${preferences.comfortFocus}.`,
+    };
+  });
 }
 
-async function* streamLocalStory(text: string) {
+function waitForNextChunk(signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new DOMException("Story generation was canceled.", "AbortError"));
+
+  return new Promise((resolve, reject) => {
+    const handleAbort = () => {
+      clearTimeout(timeoutId);
+      reject(new DOMException("Story generation was canceled.", "AbortError"));
+    };
+    const timeoutId = setTimeout(() => {
+      signal?.removeEventListener("abort", handleAbort);
+      resolve();
+    }, 20);
+    signal?.addEventListener("abort", handleAbort, { once: true });
+  });
+}
+
+async function* streamLocalStory(text: string, signal?: AbortSignal) {
   const words = text.split(" ");
-  for (let index = 0; index < words.length; index += 8) {
-    yield `${words.slice(index, index + 8).join(" ")} `;
-    await new Promise(resolve => window.setTimeout(resolve, 45));
+  for (let index = 0; index < words.length; index += 10) {
+    if (signal?.aborted) throw new DOMException("Story generation was canceled.", "AbortError");
+    yield `${words.slice(index, index + 10).join(" ")} `;
+    await waitForNextChunk(signal);
   }
 }
 
@@ -183,68 +303,6 @@ export async function generateStoryOptions(prompt: string, preferences: StoryPre
   return localStoryOptions(prompt, preferences);
 }
 
-export async function* generateFullStoryStream(title: string, summary: string, preferences: StoryPreferences) {
-  const model = await getOllamaModel();
-  if (!model) {
-    yield* streamLocalStory(localStoryText(title, summary, preferences));
-    return;
-  }
-
-  try {
-    const response = await fetch(`${ollamaBaseUrl}/api/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        stream: true,
-        prompt: `Write a soothing bedtime story for a child.
-
-Title: ${title}
-Story idea: ${summary}
-${preferenceContext(preferences)}
-
-Keep it gentle, imaginative, reassuring, and easy to read aloud. Do not include scary conflict. Build in one small calming moment, such as slow breathing, body relaxation, or a safety affirmation. End with calm sleep.`,
-        options: {
-          temperature: 0.75,
-          top_p: 0.9,
-          num_predict: storyTokenLimit(preferences),
-        },
-      }),
-    });
-
-    if (!response.ok || !response.body) {
-      throw new Error(`Ollama stream failed with ${response.status}`);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffered = "";
-    let generated = "";
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-
-      buffered += decoder.decode(value, { stream: true });
-      const lines = buffered.split("\n");
-      buffered = lines.pop() || "";
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        const chunk = JSON.parse(line) as OllamaGenerateResponse;
-        if (chunk.response) {
-          generated += chunk.response;
-          yield chunk.response;
-        }
-      }
-    }
-
-    const trimmed = generated.trim();
-    if (trimmed && !/[.!?]"?$/.test(trimmed)) {
-      yield " safe, loved, and ready for a peaceful sleep.";
-    }
-  } catch (error) {
-    console.error("Local LLM story generation failed:", error);
-    yield* streamLocalStory(localStoryText(title, summary, preferences));
-  }
+export async function* generateFullStoryStream(title: string, summary: string, preferences: StoryPreferences, signal?: AbortSignal) {
+  yield* streamLocalStory(generateLocalStoryText(title, summary, preferences), signal);
 }

@@ -122,7 +122,10 @@ public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListen
 
         textToSpeech.stop();
         textToSpeech.setLanguage(Locale.US);
-        selectBedtimeVoice();
+        if (!selectBedtimeVoice()) {
+            call.reject("A private on-device Android voice is not available.");
+            return;
+        }
         textToSpeech.setSpeechRate(rate);
         textToSpeech.setPitch(pitch);
 
@@ -156,11 +159,11 @@ public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListen
         return Math.max(min, Math.min(max, value.floatValue()));
     }
 
-    private void selectBedtimeVoice() {
-        if (textToSpeech == null) return;
+    private boolean selectBedtimeVoice() {
+        if (textToSpeech == null) return false;
 
         Set<Voice> voices = textToSpeech.getVoices();
-        if (voices == null || voices.isEmpty()) return;
+        if (voices == null || voices.isEmpty()) return false;
 
         Voice bestVoice = null;
         int bestScore = Integer.MIN_VALUE;
@@ -168,13 +171,14 @@ public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListen
         for (Voice voice : voices) {
             Locale locale = voice.getLocale();
             if (locale == null || !locale.getLanguage().equals(Locale.ENGLISH.getLanguage())) continue;
+            if (voice.isNetworkConnectionRequired()) continue;
 
             int score = 0;
             String name = voice.getName() == null ? "" : voice.getName().toLowerCase(Locale.US);
             String country = locale.getCountry() == null ? "" : locale.getCountry().toLowerCase(Locale.US);
 
             if ("us".equals(country)) score += 8;
-            if (!voice.isNetworkConnectionRequired()) score += 6;
+            score += 6;
             if (name.contains("female")) score += 5;
             if (name.contains("samantha") || name.contains("jenny") || name.contains("aria")) score += 4;
             if (name.contains("en-us") || name.contains("united-states")) score += 3;
@@ -189,7 +193,10 @@ public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListen
 
         if (bestVoice != null) {
             textToSpeech.setVoice(bestVoice);
+            return true;
         }
+
+        return false;
     }
 
     private List<String> splitForSpeech(String text) {
