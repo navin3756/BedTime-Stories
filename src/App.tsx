@@ -252,6 +252,7 @@ export default function App() {
   const [bgMusicEnabled, setBgMusicEnabled] = useState(false);
   const [selectedMusicId, setSelectedMusicId] = useState('lullaby');
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [nativeTtsAvailable, setNativeTtsAvailable] = useState(false);
   const [selectedVoiceURI, setSelectedVoiceURI] = useState('');
   const [selectedNarrationPresetId, setSelectedNarrationPresetId] = useState('calm');
   const [sleepTimerMinutes, setSleepTimerMinutes] = useState(0);
@@ -275,6 +276,19 @@ export default function App() {
   const selectedVoice = availableVoices.find(voice => voice.voiceURI === selectedVoiceURI) || null;
   const selectedNarrationPreset = NARRATION_PRESETS.find(preset => preset.id === selectedNarrationPresetId) || NARRATION_PRESETS[0];
   const selectedRoutine = ROUTINE_PRESETS.find(routine => routine.id === selectedRoutineId) || ROUTINE_PRESETS[0];
+  const isNativeTtsRuntime = canUseNativeTts();
+  const voiceSelectValue = availableVoices.length ? selectedVoiceURI : nativeTtsAvailable ? 'android-system' : '';
+  const readAloudStatus = loading
+    ? 'Weaving On This Device'
+    : isNativeTtsRuntime
+      ? nativeTtsAvailable ? 'Android Read Aloud Ready' : 'Android Read Aloud Warming Up'
+      : availableVoices.length ? 'On-Device Read Aloud Ready' : 'Story Ready To Read';
+  const voiceHelpText = isNativeTtsRuntime
+    ? nativeTtsAvailable
+      ? 'Uses Android system text-to-speech privately on this device. Sweetdreams Calm keeps the voice slower and softer for sleep.'
+      : 'Android read aloud is starting up. If it stays unavailable, enable an English system voice in Android settings.'
+    : 'Only private on-device browser voices are listed. Sweetdreams Calm uses a slower, softer profile with longer pauses for sleep.';
+
   useEffect(() => {
     try {
       const rawStories = window.localStorage.getItem(STORY_LIBRARY_KEY);
@@ -307,12 +321,44 @@ export default function App() {
     const loadVoices = () => {
       const voices = sortVoicesForBedtime(window.speechSynthesis.getVoices());
       setAvailableVoices(voices);
-      setSelectedVoiceURI(prev => prev || voices[0]?.voiceURI || '');
+      setSelectedVoiceURI(prev => voices.some(voice => voice.voiceURI === prev) ? prev : voices[0]?.voiceURI || '');
     };
 
     loadVoices();
     window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
     return () => window.speechSynthesis.removeEventListener('voiceschanged', loadVoices);
+  }, []);
+
+  useEffect(() => {
+    if (!canUseNativeTts()) return;
+
+    let mounted = true;
+    let retryHandle: number | null = null;
+    let attempts = 0;
+
+    const checkNativeTts = () => {
+      void NativeTts.isAvailable()
+        .then(({ available }) => {
+          if (!mounted) return;
+          setNativeTtsAvailable(available);
+          if (!available && attempts < 8) {
+            attempts += 1;
+            retryHandle = window.setTimeout(checkNativeTts, 500);
+          }
+        })
+        .catch(error => {
+          if (!mounted) return;
+          console.warn("Native TTS availability check failed:", error);
+          setNativeTtsAvailable(false);
+        });
+    };
+
+    checkNativeTts();
+
+    return () => {
+      mounted = false;
+      if (retryHandle) window.clearTimeout(retryHandle);
+    };
   }, []);
 
   const updatePreferences = (key: keyof StoryPreferences, value: string) => {
@@ -559,13 +605,13 @@ export default function App() {
     const handles: PluginListenerHandle[] = [];
 
     NativeTts.addListener('finished', () => {
-      if (mounted) setIsPlaying(false);
+      if (mounted && !narrationStopRequestedRef.current) setIsPlaying(false);
     }).then(handle => handles.push(handle)).catch(error => {
       console.warn("Native TTS finished listener failed:", error);
     });
 
     NativeTts.addListener('error', (payload) => {
-      if (!mounted) return;
+      if (!mounted || narrationStopRequestedRef.current) return;
       setIsPlaying(false);
       setError(payload?.error || "Read aloud stopped unexpectedly. Try another voice, or read the story on screen.");
     }).then(handle => handles.push(handle)).catch(error => {
@@ -699,8 +745,19 @@ export default function App() {
     if (!canUseNativeTts() || !storyText.trim()) return false;
 
     try {
+      const { available } = await NativeTts.isAvailable();
+      setNativeTtsAvailable(available);
+      if (!available) {
+        if (!availableVoices.length) {
+          setError("Android read aloud is unavailable. Enable or install an English system voice in Android settings, or read the story on screen.");
+          return true;
+        }
+        return false;
+      }
+
       const narrationSettings = selectedNarrationPreset;
       stopNarration();
+      narrationStopRequestedRef.current = false;
       setError('');
       setIsPlaying(true);
       completeRoutineStep('story');
@@ -714,7 +771,9 @@ export default function App() {
       return true;
     } catch (error) {
       console.warn("Native read-aloud failed:", error);
+      setNativeTtsAvailable(false);
       setIsPlaying(false);
+      if (availableVoices.length) return false;
       setError(error instanceof Error ? error.message : "Read aloud stopped unexpectedly. Try another voice, or read the story on screen.");
       return true;
     }
@@ -1219,7 +1278,7 @@ export default function App() {
                     <div className="flex items-center justify-center gap-2 text-purple-400/60">
                       <BookOpen className="w-4 h-4" />
                       <span className="text-xs uppercase tracking-[0.2em]">
-                        {loading ? 'Weaving On This Device' : 'On-Device Read Aloud Ready'}
+                        {readAloudStatus}
                       </span>
                     </div>
                   </div>
@@ -1279,9 +1338,9 @@ export default function App() {
                         </div>
                         <div className="space-y-3">
                           <select
-                            value={selectedVoiceURI}
+                            value={voiceSelectValue}
                             onChange={(e) => handleVoiceChange(e.target.value)}
-                            disabled={!availableVoices.length || isPlaying}
+                            disabled={isPlaying || !availableVoices.length}
                             className="w-full rounded-xl border border-white/10 bg-[#171126] px-4 py-3 text-sm text-purple-50 focus:outline-none focus:ring-2 focus:ring-purple-500/40 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             {availableVoices.length ? (
@@ -1290,8 +1349,10 @@ export default function App() {
                                   {index === 0 ? 'Recommended: ' : ''}{voice.name} {voice.lang ? `(${voice.lang})` : ''}
                                 </option>
                               ))
+                            ) : nativeTtsAvailable ? (
+                              <option value="android-system">Android system bedtime voice</option>
                             ) : (
-                              <option>No private on-device voice found</option>
+                              <option value="">Read aloud warming up</option>
                             )}
                           </select>
 
@@ -1307,7 +1368,7 @@ export default function App() {
                           </select>
                         </div>
                         <p className="mt-2 text-xs text-purple-200/40">
-                          Only private on-device voices are listed. Sweetdreams Calm uses a slower, softer profile with longer pauses for sleep.
+                          {voiceHelpText}
                         </p>
                       </div>
 

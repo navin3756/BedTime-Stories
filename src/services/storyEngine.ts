@@ -236,12 +236,26 @@ function ideaLabel(prompt: string): string {
 
 function chooseWorld(prompt: string): StoryWorld {
   const lower = prompt.toLowerCase();
-  return WORLDS.find(world => world.keywords.some(keyword => lower.includes(keyword))) || WORLDS[WORLDS.length - 1];
+  let bestWorld = WORLDS[WORLDS.length - 1];
+  let bestScore = 0;
+
+  for (const world of WORLDS) {
+    const score = world.keywords.filter(keyword => lower.includes(keyword)).length;
+    const isNamedWorld = lower.includes(world.id);
+    const bestIsNamedWorld = lower.includes(bestWorld.id);
+    if (score > bestScore || (score === bestScore && score > 0 && isNamedWorld && !bestIsNamedWorld)) {
+      bestWorld = world;
+      bestScore = score;
+    }
+  }
+
+  return bestWorld;
 }
 
 const STOP_WORDS = new Set([
   "about", "after", "again", "along", "also", "and", "around", "because", "before", "being", "between",
   "from", "into", "little", "over", "that", "their", "there", "they", "through", "with", "while",
+  "where",
   "a", "an", "the", "to", "in", "on", "of", "for", "is", "are", "was", "were",
 ]);
 
@@ -302,8 +316,20 @@ function describeTopic(topic: string): TopicShape {
     };
   }
 
+  const whereMatch = cleaned.match(/^(.*?)\s+where\s+(.+)$/i);
+  if (whereMatch) {
+    const place = withArticle(whereMatch[1]);
+    const event = cleanInput(whereMatch[2], 90).replace(/[.!?]+$/, "");
+
+    return {
+      mainCharacter: place,
+      mission: event ? `helping ${event}` : "making the bedtime place feel calm",
+      object: event || place,
+    };
+  }
+
   const actionMatch = cleaned.match(
-    /^(.*?)\b(learning to|teaching|opening|singing|exploring|finding|preparing|sharing|visiting|building|making|baking|dancing|gardening|helping|looking for)\b\s*(.*)$/i,
+    /^(.*?)\b(learning to|teaching|opening|singing|exploring|finding|preparing|sharing|visiting|building|making|baking|dancing|gardening|helping|looking for|floating|becoming|turning|carrying)\b\s*(.*)$/i,
   );
 
   if (actionMatch) {

@@ -72,7 +72,7 @@ public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListen
     @PluginMethod
     public void isAvailable(PluginCall call) {
         JSObject result = new JSObject();
-        result.put("available", ready);
+        result.put("available", canSpeakEnglish());
         call.resolve(result);
     }
 
@@ -121,9 +121,8 @@ public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListen
         float volume = safeFloat(call.getDouble("volume"), 0.9f, 0.0f, 1.0f);
 
         textToSpeech.stop();
-        textToSpeech.setLanguage(Locale.US);
-        if (!selectBedtimeVoice()) {
-            call.reject("A private on-device Android voice is not available.");
+        if (!prepareBedtimeSpeech()) {
+            call.reject("Android text-to-speech is unavailable. Enable or install an English system voice in Android settings.");
             return;
         }
         textToSpeech.setSpeechRate(rate);
@@ -157,6 +156,25 @@ public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListen
         }
 
         return Math.max(min, Math.min(max, value.floatValue()));
+    }
+
+    private boolean canSpeakEnglish() {
+        if (textToSpeech == null || !ready) return false;
+
+        int languageStatus = textToSpeech.isLanguageAvailable(Locale.US);
+        return languageStatus >= TextToSpeech.LANG_AVAILABLE;
+    }
+
+    private boolean prepareBedtimeSpeech() {
+        if (textToSpeech == null || !ready) return false;
+
+        int languageStatus = textToSpeech.setLanguage(Locale.US);
+        if (languageStatus == TextToSpeech.LANG_MISSING_DATA || languageStatus == TextToSpeech.LANG_NOT_SUPPORTED) {
+            return false;
+        }
+
+        selectBedtimeVoice();
+        return true;
     }
 
     private boolean selectBedtimeVoice() {
