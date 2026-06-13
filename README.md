@@ -1,5 +1,7 @@
 # Sweetdreams Bedtime Stories
 
+Current release: `1.6`
+
 A private, offline-first bedtime story app for creating gentle stories, saving recent favorites, and reading them aloud on the device.
 
 ## Bedtime Features

@@ -1,5 +1,7 @@
 # Sweetdreams Google Play Release Checklist
 
+Current release: `1.6` (`versionCode 7`)
+
 ## Build package
 
 - Package name: `com.sweetdreams.bedtimestories`

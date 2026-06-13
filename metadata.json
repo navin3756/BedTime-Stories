@@ -1,5 +1,6 @@
 {
   "name": "Sweetdreams Bedtime Stories",
+  "version": "1.6",
   "description": "A private app that creates gentle personalized bedtime stories for kids on the device.",
   "requestFramePermissions": []
 }
