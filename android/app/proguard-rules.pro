@@ -19,3 +19,23 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# --- Capacitor / WebView bridge ---
+# Capacitor discovers plugins and methods via reflection + annotations, so R8
+# must not rename or strip them. Without these keeps, minification breaks
+# native plugin calls (e.g. NativeTts) at runtime.
+-keepattributes *Annotation*
+-keepattributes JavascriptInterface
+-keep class com.getcapacitor.** { *; }
+-keep class org.apache.cordova.** { *; }
+-keep public class * extends com.getcapacitor.Plugin
+-keep @com.getcapacitor.annotation.CapacitorPlugin public class * { public *; }
+-keepclassmembers class * {
+    @com.getcapacitor.PluginMethod public <methods>;
+    @com.getcapacitor.annotation.PermissionCallback <methods>;
+    @com.getcapacitor.annotation.ActivityCallback <methods>;
+    @android.webkit.JavascriptInterface <methods>;
+}
+
+# App's own native plugins (NativeTtsPlugin and friends).
+-keep class com.sweetdreams.bedtimestories.** { *; }

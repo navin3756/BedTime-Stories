@@ -370,6 +370,7 @@ export default function App() {
     let mounted = true;
     let retryHandle: number | null = null;
     let attempts = 0;
+    let voiceFetchAttempts = 0;
     let lostVoiceNotified = false;
 
     const refreshNativeVoices = () => {
@@ -407,7 +408,15 @@ export default function App() {
         .catch(error => {
           if (!mounted) return;
           console.warn("Native TTS voice list failed:", error);
-          setNativeVoices([]);
+          // A transient listVoices() failure on a slow device must not wipe a
+          // list we already loaded (would leave an empty dropdown). Keep what we
+          // have and retry a few times.
+          if (voiceFetchAttempts < 6) {
+            voiceFetchAttempts += 1;
+            window.setTimeout(() => {
+              if (mounted) refreshNativeVoices();
+            }, 600);
+          }
         });
     };
 
@@ -704,6 +713,11 @@ export default function App() {
       setError(payload?.error || "Read aloud stopped unexpectedly. Try another voice, or read the story on screen.");
     }).then(handle => handles.push(handle)).catch(error => {
       console.warn("Native TTS error listener failed:", error);
+      // Without this listener, a native failure after speak() resolves would be
+      // lost silently. Let the user know narration may stop without a message.
+      if (mounted) {
+        setError("Read-aloud setup didn't finish. If narration stops without a message, please reopen the app.");
+      }
     });
 
     return () => {
@@ -957,6 +971,15 @@ export default function App() {
         }
 
         console.warn("Browser read-aloud error:", event.error);
+
+        if (event.error === 'network') {
+          // Voices are filtered to localService only, so a network error means
+          // the browser tried to reach the internet — a privacy concern worth
+          // surfacing rather than hiding behind a generic message.
+          console.error("Privacy check: a read-aloud voice attempted a network request despite on-device-only selection.");
+          failNarration("Read aloud was stopped because the chosen voice tried to use the internet. Sweetdreams only uses private on-device voices, so please pick a different voice or read on screen.");
+          return;
+        }
 
         failNarration("Read aloud stopped unexpectedly. Try another voice, or read the story on screen.");
       };

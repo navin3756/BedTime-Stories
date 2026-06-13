@@ -51,6 +51,7 @@ interface StoryPlan {
 const GENERAL_HARM_REFUSAL = "I can't use that idea for a child's bedtime story. Let's make it gentle and safe, with no one getting hurt. Try friendship, animals, nature, or a magical helper.";
 const IDENTITY_OR_ADULT_REFUSAL = "I can't make a children's story with adult content or unkindness toward people because of who they are. Let's choose friendship, respect, or a magical adventure instead.";
 const SUPPORTIVE_REFUSAL = "I can't turn that into a bedtime story. If this is about you or someone you know, please tell a trusted grown-up now. We can make a gentle story about getting help and feeling safe.";
+const SENSITIVE_THEME_REFUSAL = "Let's choose a lighter idea for bedtime. Big feelings like loss, grief, or family changes are real and important, but they're best shared with a trusted grown-up. We can make a cozy story about comfort, friendship, or a calm adventure instead.";
 
 const SELF_HARM_OR_ABUSE_PATTERNS: RegExp[] = [
   /\b(suicid(?:e|al)|self[- ]?harm(?:ing)?|cut(?:ting)? myself|hurt(?:ing)? (?:myself|themself|themselves)|want(?:s|ed)? to die)\b/i,
@@ -69,6 +70,14 @@ const GENERAL_HARM_PATTERNS: RegExp[] = [
   /\b(cocaine|heroin|meth|illegal drugs?|drug dealer|overdose[ds]?|getting high)\b/i,
   /\b(ignore|disregard|bypass|override)\b.{0,32}\b(safety|safeguards?|rules|instructions)\b/i,
   /\b(system prompt|jailbreak|not age[- ]?appropriate|write anything)\b/i,
+];
+
+// Heavy real-life themes that are not "harm" but are not suitable to weave into
+// an unsupervised bedtime story. Deliberately excludes "fight"/"argument" so the
+// gentle sibling-conflict story feature keeps working.
+const SENSITIVE_THEME_PATTERNS: RegExp[] = [
+  /\b(death|dead|dying|die[ds]?|died|funeral[s]?|grief|grieving|grieve[ds]?|mourn(?:s|ed|ing)?)\b/i,
+  /\b(divorce[ds]?|divorcing)\b/i,
 ];
 
 const WORLDS: StoryWorld[] = [
@@ -471,11 +480,12 @@ export function validateStoryIdea(prompt: string, preferences?: Partial<StoryPre
   if (values.some(value => DENSE_BLOCKLIST.some(term => normalizeForSafety(value).dense.includes(term)))) {
     throw new Error(GENERAL_HARM_REFUSAL);
   }
+  if (values.some(value => violatesPatterns(SENSITIVE_THEME_PATTERNS, value))) throw new Error(SENSITIVE_THEME_REFUSAL);
 }
 
 export function isStorySafetyRefusal(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  return [GENERAL_HARM_REFUSAL, IDENTITY_OR_ADULT_REFUSAL, SUPPORTIVE_REFUSAL].includes(error.message);
+  return [GENERAL_HARM_REFUSAL, IDENTITY_OR_ADULT_REFUSAL, SUPPORTIVE_REFUSAL, SENSITIVE_THEME_REFUSAL].includes(error.message);
 }
 
 export function generateLocalStoryText(title: string, summary: string, preferences: StoryPreferences, prompt?: string): string {
