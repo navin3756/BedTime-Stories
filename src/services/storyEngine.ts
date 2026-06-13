@@ -65,8 +65,10 @@ const IDENTITY_OR_ADULT_PATTERNS: RegExp[] = [
 ];
 
 const GENERAL_HARM_PATTERNS: RegExp[] = [
-  /\b(kill(?:s|ed|ing)?|murder(?:s|ed|ing)?|stab(?:s|bed|bing)?|shoot(?:s|ing)?|weapon(?:s)?|bomb(?:s|ing)?|torture[ds]?|kidnap(?:s|ped|ping)?|gore|blood(?:y|ied)?|exposed organs?)\b/i,
-  /(?<!water )\bgun(?:s)?\b/i,
+  /\b(kill(?:s|ed|ing)?|murder(?:s|ed|ing)?|stab(?:s|bed|bing)?|weapon(?:s)?|bomb(?:s|ing)?|torture[ds]?|kidnap(?:s|ped|ping)?|gore|blood(?:y|ied)?|exposed organs?)\b/i,
+  // "shoot/shooting" but not the harmless "shooting star".
+  /\bshoot(?:s|ing)?\b(?!\s+stars?\b)/i,
+  /(?<!water )\bgun(?:s|shot|shots|fire)?\b/i,
   /\b(cocaine|heroin|meth|illegal drugs?|drug dealer|overdose[ds]?|getting high)\b/i,
   /\b(ignore|disregard|bypass|override)\b.{0,32}\b(safety|safeguards?|rules|instructions)\b/i,
   /\b(system prompt|jailbreak|not age[- ]?appropriate|write anything)\b/i,
@@ -226,11 +228,12 @@ function pick<T>(items: T[], seed: number, offset = 0): T {
   return items[(seed + offset) % items.length];
 }
 
-// Match a keyword only as a whole word so "cat" does not fire on "education",
-// "star" on "start", or "sea" on "season".
+// Match a keyword as a whole word (optionally pluralized) so "cat" matches
+// "cat"/"cats" but not "education", and "star" matches "star"/"stars" but not
+// "start" or "season".
 function matchesKeyword(haystack: string, keyword: string): boolean {
   const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`\\b${escaped}\\b`, "i").test(haystack);
+  return new RegExp(`\\b${escaped}s?\\b`, "i").test(haystack);
 }
 
 function cleanInput(value: string, maxLength = 120): string {
@@ -450,26 +453,20 @@ const LEET_MAP: Record<string, string> = {
   "0": "o", "1": "l", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s", "|": "l",
 };
 
-// Long, distinctive terms that almost never appear inside an innocent word, so
-// we can safely match them as substrings after stripping all spacing. This
-// catches space/punctuation injection like "co ca ine" or "s u i c i d e".
-const DENSE_BLOCKLIST = [
-  "cocaine", "heroin", "suicide", "selfharm", "molest", "pornography", "overdose", "kidnap", "rape", "murder",
-];
-
-function normalizeForSafety(value: string): { punctStripped: string; dense: string } {
+// Normalize a prompt for safety matching: map leetspeak to letters and drop
+// in-word separators (hyphens, dots, underscores) so "k-i-l-l" -> "kill" and
+// "c0caine" -> "cocaine". Spaces are KEPT as word breaks so adjacent innocent
+// words are never merged into a banned word (e.g. "hero in" must not become
+// "heroin"). Patterns stay word-boundary anchored, so this never refuses a
+// prompt that merely contains a banned word as a substring ("grapes", "heroine").
+function normalizeForSafety(value: string): string {
   const leet = value.toLowerCase().replace(/[0134578@$|]/g, ch => LEET_MAP[ch] ?? ch);
-  // Drop in-word separators (hyphens, dots, underscores) but keep spaces as word
-  // breaks, so "k-i-l-l" -> "kill" while real words stay separated.
-  const punctStripped = leet.replace(/[^a-z\s]+/g, "");
-  // Remove all spacing too, to catch separated letters in long unique terms.
-  const dense = leet.replace(/[^a-z]+/g, "");
-  return { punctStripped, dense };
+  return leet.replace(/[^a-z\s]+/g, "");
 }
 
 function violatesPatterns(patterns: RegExp[], value: string): boolean {
-  const { punctStripped } = normalizeForSafety(value);
-  return patterns.some(pattern => pattern.test(value) || pattern.test(punctStripped));
+  const normalized = normalizeForSafety(value);
+  return patterns.some(pattern => pattern.test(value) || pattern.test(normalized));
 }
 
 export function validateStoryIdea(prompt: string, preferences?: Partial<StoryPreferences>): void {
@@ -477,9 +474,6 @@ export function validateStoryIdea(prompt: string, preferences?: Partial<StoryPre
   if (values.some(value => violatesPatterns(SELF_HARM_OR_ABUSE_PATTERNS, value))) throw new Error(SUPPORTIVE_REFUSAL);
   if (values.some(value => violatesPatterns(IDENTITY_OR_ADULT_PATTERNS, value))) throw new Error(IDENTITY_OR_ADULT_REFUSAL);
   if (values.some(value => violatesPatterns(GENERAL_HARM_PATTERNS, value))) throw new Error(GENERAL_HARM_REFUSAL);
-  if (values.some(value => DENSE_BLOCKLIST.some(term => normalizeForSafety(value).dense.includes(term)))) {
-    throw new Error(GENERAL_HARM_REFUSAL);
-  }
   if (values.some(value => violatesPatterns(SENSITIVE_THEME_PATTERNS, value))) throw new Error(SENSITIVE_THEME_REFUSAL);
 }
 

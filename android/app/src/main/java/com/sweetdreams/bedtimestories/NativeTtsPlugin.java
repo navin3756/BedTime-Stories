@@ -119,12 +119,10 @@ public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListen
             call.reject("No story text provided.");
             return;
         }
-        if (!isSupportedVoiceId(voiceId)) {
-            call.reject("That local Android voice is no longer available on this device.");
-            return;
-        }
-        selectedVoiceId = voiceId;
 
+        // While TTS is still initializing, getVoices() is empty, so a valid saved
+        // local voice would look "unavailable". Defer voice validation to speakNow
+        // (after onInit), which rejects gracefully if the voice is truly gone.
         if (textToSpeech == null) {
             queuePendingSpeak(call);
             textToSpeech = new TextToSpeech(getContext().getApplicationContext(), this);
@@ -135,6 +133,12 @@ public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListen
             queuePendingSpeak(call);
             return;
         }
+
+        if (!isSupportedVoiceId(voiceId)) {
+            call.reject("That local Android voice is no longer available on this device.");
+            return;
+        }
+        selectedVoiceId = voiceId;
 
         speakNow(call);
     }
