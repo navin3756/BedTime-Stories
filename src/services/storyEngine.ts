@@ -217,6 +217,13 @@ function pick<T>(items: T[], seed: number, offset = 0): T {
   return items[(seed + offset) % items.length];
 }
 
+// Match a keyword only as a whole word so "cat" does not fire on "education",
+// "star" on "start", or "sea" on "season".
+function matchesKeyword(haystack: string, keyword: string): boolean {
+  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}\\b`, "i").test(haystack);
+}
+
 function cleanInput(value: string, maxLength = 120): string {
   return value.trim().replace(/\s+/g, " ").replace(/[<>]/g, "").slice(0, maxLength);
 }
@@ -231,7 +238,10 @@ function titleCase(value: string): string {
 
 function ideaLabel(prompt: string): string {
   const cleaned = cleanInput(prompt).replace(/[.!?]+$/, "");
-  return cleaned || "A Little Dream";
+  // Reject input with no actual letters (e.g. "12345", "@#$%") so it never
+  // becomes a character name or title like "a 12345".
+  if (!cleaned || !/[a-z]/i.test(cleaned)) return "A Little Dream";
+  return cleaned;
 }
 
 function chooseWorld(prompt: string): StoryWorld {
@@ -240,9 +250,9 @@ function chooseWorld(prompt: string): StoryWorld {
   let bestScore = 0;
 
   for (const world of WORLDS) {
-    const score = world.keywords.filter(keyword => lower.includes(keyword)).length;
-    const isNamedWorld = lower.includes(world.id);
-    const bestIsNamedWorld = lower.includes(bestWorld.id);
+    const score = world.keywords.filter(keyword => matchesKeyword(lower, keyword)).length;
+    const isNamedWorld = matchesKeyword(lower, world.id);
+    const bestIsNamedWorld = matchesKeyword(lower, bestWorld.id);
     if (score > bestScore || (score === bestScore && score > 0 && isNamedWorld && !bestIsNamedWorld)) {
       bestWorld = world;
       bestScore = score;
@@ -280,7 +290,7 @@ function extractTopicFromSummary(summary: string): string {
 
 function chooseArc(topic: string): StoryArc {
   const lower = topic.toLowerCase();
-  return STORY_ARCS.find(arc => arc.keywords.some(keyword => lower.includes(keyword))) || STORY_ARCS[STORY_ARCS.length - 1];
+  return STORY_ARCS.find(arc => arc.keywords.some(keyword => matchesKeyword(lower, keyword))) || STORY_ARCS[STORY_ARCS.length - 1];
 }
 
 function makeVariationKey(value?: string): string {
@@ -426,11 +436,41 @@ function lengthParagraphs(preferences: StoryPreferences): number {
   return 2;
 }
 
+// Common leetspeak / homoglyph substitutions used to dodge a word filter.
+const LEET_MAP: Record<string, string> = {
+  "0": "o", "1": "l", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s", "|": "l",
+};
+
+// Long, distinctive terms that almost never appear inside an innocent word, so
+// we can safely match them as substrings after stripping all spacing. This
+// catches space/punctuation injection like "co ca ine" or "s u i c i d e".
+const DENSE_BLOCKLIST = [
+  "cocaine", "heroin", "suicide", "selfharm", "molest", "pornography", "overdose", "kidnap", "rape", "murder",
+];
+
+function normalizeForSafety(value: string): { punctStripped: string; dense: string } {
+  const leet = value.toLowerCase().replace(/[0134578@$|]/g, ch => LEET_MAP[ch] ?? ch);
+  // Drop in-word separators (hyphens, dots, underscores) but keep spaces as word
+  // breaks, so "k-i-l-l" -> "kill" while real words stay separated.
+  const punctStripped = leet.replace(/[^a-z\s]+/g, "");
+  // Remove all spacing too, to catch separated letters in long unique terms.
+  const dense = leet.replace(/[^a-z]+/g, "");
+  return { punctStripped, dense };
+}
+
+function violatesPatterns(patterns: RegExp[], value: string): boolean {
+  const { punctStripped } = normalizeForSafety(value);
+  return patterns.some(pattern => pattern.test(value) || pattern.test(punctStripped));
+}
+
 export function validateStoryIdea(prompt: string, preferences?: Partial<StoryPreferences>): void {
   const values = [prompt, preferences?.childName || "", preferences?.companion || ""];
-  if (values.some(value => SELF_HARM_OR_ABUSE_PATTERNS.some(pattern => pattern.test(value)))) throw new Error(SUPPORTIVE_REFUSAL);
-  if (values.some(value => IDENTITY_OR_ADULT_PATTERNS.some(pattern => pattern.test(value)))) throw new Error(IDENTITY_OR_ADULT_REFUSAL);
-  if (values.some(value => GENERAL_HARM_PATTERNS.some(pattern => pattern.test(value)))) throw new Error(GENERAL_HARM_REFUSAL);
+  if (values.some(value => violatesPatterns(SELF_HARM_OR_ABUSE_PATTERNS, value))) throw new Error(SUPPORTIVE_REFUSAL);
+  if (values.some(value => violatesPatterns(IDENTITY_OR_ADULT_PATTERNS, value))) throw new Error(IDENTITY_OR_ADULT_REFUSAL);
+  if (values.some(value => violatesPatterns(GENERAL_HARM_PATTERNS, value))) throw new Error(GENERAL_HARM_REFUSAL);
+  if (values.some(value => DENSE_BLOCKLIST.some(term => normalizeForSafety(value).dense.includes(term)))) {
+    throw new Error(GENERAL_HARM_REFUSAL);
+  }
 }
 
 export function isStorySafetyRefusal(error: unknown): boolean {
