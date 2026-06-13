@@ -180,10 +180,20 @@ const nativeTtsPluginSource = readFileSync(
   "android/app/src/main/java/com/sweetdreams/bedtimestories/NativeTtsPlugin.java",
   "utf8",
 );
+const appSource = readFileSync("src/App.tsx", "utf8");
 assert.doesNotMatch(
   nativeTtsPluginSource,
   /A private on-device Android voice is not available/i,
   "Android narration should fall back to the system TTS voice instead of hard-rejecting missing voice metadata",
 );
+assert.match(nativeTtsPluginSource, /void listVoices\(/, "Android plugin should expose local voice discovery");
+assert.match(nativeTtsPluginSource, /void selectVoice\(/, "Android plugin should expose local voice selection");
+assert.match(nativeTtsPluginSource, /offlineNeuralEngine/, "Android plugin should report offline neural engine status");
+assert.match(nativeTtsPluginSource, /getOfflineEnglishVoices/, "Android plugin should enumerate installed offline English voices");
+assert.match(nativeTtsPluginSource, /android-voice:/, "Android plugin should assign stable ids to installed local voices");
+assert.match(appSource, /interface NativeVoice/, "App should keep a typed native voice contract");
+assert.match(appSource, /NativeTts\.listVoices/, "App should load native local voice options");
+assert.match(appSource, /voiceId: selectedNativeVoice/, "Native narration should pass the selected local voice id");
+assert.match(appSource, /sweetdreams\.nativeVoice/, "App should remember the selected local voice on-device");
 
-console.log("MVP acceptance checks passed: relevance, variation, child safety, and reassuring language.");
+console.log("MVP acceptance checks passed: relevance, variation, child safety, reassuring language, and local voice contract.");

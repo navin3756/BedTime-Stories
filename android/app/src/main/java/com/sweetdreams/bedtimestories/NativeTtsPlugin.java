@@ -4,23 +4,29 @@ import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.speech.tts.Voice;
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
 @CapacitorPlugin(name = "NativeTts")
 public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListener {
+    private static final String SYSTEM_VOICE_ID = "android-system";
+    private static final String LOCAL_VOICE_PREFIX = "android-voice:";
+
     private TextToSpeech textToSpeech;
     private boolean ready = false;
     private PluginCall pendingSpeakCall;
     private String activeUtterancePrefix = "";
     private String activeFinalUtteranceId = "";
+    private String selectedVoiceId = SYSTEM_VOICE_ID;
 
     @Override
     public void load() {
@@ -77,12 +83,47 @@ public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListen
     }
 
     @PluginMethod
+    public void listVoices(PluginCall call) {
+        JSArray voices = new JSArray();
+        voices.put(createSystemVoice());
+
+        List<Voice> localVoices = getOfflineEnglishVoices();
+        for (int i = 0; i < localVoices.size(); i++) {
+            voices.put(createLocalVoice(localVoices.get(i), i + 1));
+        }
+
+        JSObject result = new JSObject();
+        result.put("voices", voices);
+        result.put("selectedVoiceId", selectedVoiceId);
+        result.put("offlineNeuralEngine", "not-bundled");
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void selectVoice(PluginCall call) {
+        String voiceId = call.getString("voiceId", SYSTEM_VOICE_ID).trim();
+        if (!isSupportedVoiceId(voiceId)) {
+            call.reject("That local Android voice is no longer available on this device.");
+            return;
+        }
+
+        selectedVoiceId = voiceId;
+        call.resolve();
+    }
+
+    @PluginMethod
     public void speak(PluginCall call) {
         String text = call.getString("text", "").trim();
+        String voiceId = call.getString("voiceId", selectedVoiceId).trim();
         if (text.isEmpty()) {
             call.reject("No story text provided.");
             return;
         }
+        if (!isSupportedVoiceId(voiceId)) {
+            call.reject("That local Android voice is no longer available on this device.");
+            return;
+        }
+        selectedVoiceId = voiceId;
 
         if (textToSpeech == null) {
             pendingSpeakCall = call;
@@ -116,15 +157,17 @@ public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListen
         }
 
         String text = call.getString("text", "").trim();
+        String voiceId = call.getString("voiceId", selectedVoiceId).trim();
         float rate = safeFloat(call.getDouble("rate"), 0.82f, 0.5f, 1.5f);
         float pitch = safeFloat(call.getDouble("pitch"), 0.92f, 0.5f, 1.5f);
         float volume = safeFloat(call.getDouble("volume"), 0.9f, 0.0f, 1.0f);
 
         textToSpeech.stop();
-        if (!prepareBedtimeSpeech()) {
+        if (!prepareBedtimeSpeech(voiceId)) {
             call.reject("Android text-to-speech is unavailable. Enable or install an English system voice in Android settings.");
             return;
         }
+        selectedVoiceId = voiceId;
         textToSpeech.setSpeechRate(rate);
         textToSpeech.setPitch(pitch);
 
@@ -158,6 +201,34 @@ public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListen
         return Math.max(min, Math.min(max, value.floatValue()));
     }
 
+    private JSObject createSystemVoice() {
+        JSObject voice = new JSObject();
+        voice.put("id", SYSTEM_VOICE_ID);
+        voice.put("name", "Android system bedtime voice");
+        voice.put("provider", "android-system");
+        voice.put("localOnly", true);
+        voice.put("neural", false);
+        voice.put("available", canSpeakEnglish());
+        voice.put("description", "Private on-device Android text-to-speech fallback.");
+        return voice;
+    }
+
+    private JSObject createLocalVoice(Voice androidVoice, int index) {
+        Locale locale = androidVoice.getLocale();
+        String languageName = locale == null ? "English" : locale.getDisplayName(Locale.US);
+        String rawName = androidVoice.getName() == null ? "" : androidVoice.getName();
+
+        JSObject voice = new JSObject();
+        voice.put("id", LOCAL_VOICE_PREFIX + rawName);
+        voice.put("name", "Local voice " + index + " - " + languageName);
+        voice.put("provider", "android-system");
+        voice.put("localOnly", true);
+        voice.put("neural", looksNeural(androidVoice));
+        voice.put("available", true);
+        voice.put("description", "Installed Android voice: " + rawName);
+        return voice;
+    }
+
     private boolean canSpeakEnglish() {
         if (textToSpeech == null || !ready) return false;
 
@@ -165,7 +236,7 @@ public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListen
         return languageStatus >= TextToSpeech.LANG_AVAILABLE;
     }
 
-    private boolean prepareBedtimeSpeech() {
+    private boolean prepareBedtimeSpeech(String voiceId) {
         if (textToSpeech == null || !ready) return false;
 
         int languageStatus = textToSpeech.setLanguage(Locale.US);
@@ -173,8 +244,13 @@ public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListen
             return false;
         }
 
-        selectBedtimeVoice();
-        return true;
+        if (SYSTEM_VOICE_ID.equals(voiceId)) {
+            selectBedtimeVoice();
+            return true;
+        }
+
+        Voice selectedVoice = findVoiceById(voiceId);
+        return selectedVoice != null && textToSpeech.setVoice(selectedVoice) == TextToSpeech.SUCCESS;
     }
 
     private boolean selectBedtimeVoice() {
@@ -215,6 +291,55 @@ public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListen
         }
 
         return false;
+    }
+
+    private boolean isSupportedVoiceId(String voiceId) {
+        return SYSTEM_VOICE_ID.equals(voiceId) || findVoiceById(voiceId) != null;
+    }
+
+    private Voice findVoiceById(String voiceId) {
+        if (textToSpeech == null || voiceId == null || !voiceId.startsWith(LOCAL_VOICE_PREFIX)) return null;
+
+        String voiceName = voiceId.substring(LOCAL_VOICE_PREFIX.length());
+        for (Voice voice : getOfflineEnglishVoices()) {
+            if (voiceName.equals(voice.getName())) return voice;
+        }
+        return null;
+    }
+
+    private List<Voice> getOfflineEnglishVoices() {
+        List<Voice> result = new ArrayList<>();
+        if (textToSpeech == null || !ready) return result;
+
+        Set<Voice> voices = textToSpeech.getVoices();
+        if (voices == null) return result;
+
+        for (Voice voice : voices) {
+            Locale locale = voice.getLocale();
+            if (locale == null || !Locale.ENGLISH.getLanguage().equals(locale.getLanguage())) continue;
+            if (voice.isNetworkConnectionRequired()) continue;
+            result.add(voice);
+        }
+
+        result.sort(Comparator.comparingInt(this::voiceScore).reversed().thenComparing(voice -> voice.getName() == null ? "" : voice.getName()));
+        return result;
+    }
+
+    private int voiceScore(Voice voice) {
+        Locale locale = voice.getLocale();
+        String country = locale == null || locale.getCountry() == null ? "" : locale.getCountry();
+        String name = voice.getName() == null ? "" : voice.getName().toLowerCase(Locale.US);
+        int score = voice.getQuality() - voice.getLatency();
+
+        if (Locale.US.getCountry().equals(country)) score += 8;
+        if (looksNeural(voice)) score += 6;
+        if (name.contains("female") || name.contains("samantha") || name.contains("jenny") || name.contains("aria")) score += 4;
+        return score;
+    }
+
+    private boolean looksNeural(Voice voice) {
+        String name = voice.getName() == null ? "" : voice.getName().toLowerCase(Locale.US);
+        return voice.getQuality() >= Voice.QUALITY_HIGH || name.contains("neural") || name.contains("natural");
     }
 
     private List<String> splitForSpeech(String text) {

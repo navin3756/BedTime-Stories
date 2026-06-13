@@ -38,6 +38,7 @@ interface NarrationPreset {
 
 const STORY_LIBRARY_KEY = 'sweetdreams.savedStories';
 const STORY_PROFILE_KEY = 'sweetdreams.storyProfile';
+const NATIVE_VOICE_KEY = 'sweetdreams.nativeVoice';
 const MAX_BROWSER_NARRATION_CHARS = 180;
 const ANDROID_SPEECH_MIN_RATE = 0.72;
 const ANDROID_SPEECH_MIN_PITCH = 0.84;
@@ -147,12 +148,24 @@ const QUICK_STORY_IDEAS: QuickStoryIdea[] = [
 
 interface NativeTtsPlugin {
   isAvailable(): Promise<{ available: boolean }>;
-  speak(options: { text: string; rate: number; pitch: number; volume: number }): Promise<void>;
+  listVoices(): Promise<{ voices: NativeVoice[]; selectedVoiceId?: string; offlineNeuralEngine?: string }>;
+  selectVoice(options: { voiceId: string }): Promise<void>;
+  speak(options: { text: string; rate: number; pitch: number; volume: number; voiceId?: string }): Promise<void>;
   stop(): Promise<void>;
   addListener(eventName: 'started' | 'finished' | 'error', listenerFunc: (payload?: { error?: string; code?: number }) => void): Promise<PluginListenerHandle>;
 }
 
 const NativeTts = registerPlugin<NativeTtsPlugin>('NativeTts');
+
+interface NativeVoice {
+  id: string;
+  name: string;
+  provider: 'android-system' | 'sherpa-onnx' | string;
+  localOnly: boolean;
+  neural: boolean;
+  available: boolean;
+  description?: string;
+}
 
 function voiceScore(voice: SpeechSynthesisVoice): number {
   const name = voice.name.toLowerCase();
@@ -253,6 +266,14 @@ export default function App() {
   const [selectedMusicId, setSelectedMusicId] = useState('lullaby');
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [nativeTtsAvailable, setNativeTtsAvailable] = useState(false);
+  const [nativeVoices, setNativeVoices] = useState<NativeVoice[]>([]);
+  const [selectedNativeVoiceId, setSelectedNativeVoiceId] = useState(() => {
+    try {
+      return window.localStorage.getItem(NATIVE_VOICE_KEY) || 'android-system';
+    } catch {
+      return 'android-system';
+    }
+  });
   const [selectedVoiceURI, setSelectedVoiceURI] = useState('');
   const [selectedNarrationPresetId, setSelectedNarrationPresetId] = useState('calm');
   const [sleepTimerMinutes, setSleepTimerMinutes] = useState(0);
@@ -274,10 +295,12 @@ export default function App() {
 
   const currentMusic = BG_MUSIC_TRACKS.find(t => t.id === selectedMusicId) || BG_MUSIC_TRACKS[0];
   const selectedVoice = availableVoices.find(voice => voice.voiceURI === selectedVoiceURI) || null;
+  const selectedNativeVoice = nativeVoices.find(voice => voice.id === selectedNativeVoiceId) || nativeVoices[0] || null;
   const selectedNarrationPreset = NARRATION_PRESETS.find(preset => preset.id === selectedNarrationPresetId) || NARRATION_PRESETS[0];
   const selectedRoutine = ROUTINE_PRESETS.find(routine => routine.id === selectedRoutineId) || ROUTINE_PRESETS[0];
   const isNativeTtsRuntime = canUseNativeTts();
-  const voiceSelectValue = availableVoices.length ? selectedVoiceURI : nativeTtsAvailable ? 'android-system' : '';
+  const voiceSelectValue = isNativeTtsRuntime ? selectedNativeVoice?.id || selectedNativeVoiceId : selectedVoiceURI;
+  const nativeVoiceCanChange = nativeVoices.filter(voice => voice.available).length > 1;
   const readAloudStatus = loading
     ? 'Weaving On This Device'
     : isNativeTtsRuntime
@@ -285,7 +308,11 @@ export default function App() {
       : availableVoices.length ? 'On-Device Read Aloud Ready' : 'Story Ready To Read';
   const voiceHelpText = isNativeTtsRuntime
     ? nativeTtsAvailable
-      ? 'Uses Android system text-to-speech privately on this device. Sweetdreams Calm keeps the voice slower and softer for sleep.'
+      ? selectedNativeVoice?.neural
+        ? 'Uses a high-quality voice installed on this device. Sweetdreams Calm keeps it slower and softer for sleep.'
+        : nativeVoiceCanChange
+          ? 'Choose from the private offline English voices installed on this device. No story text is sent to a voice service.'
+          : 'Uses Android system text-to-speech privately on this device. Install another offline English voice in Android settings for more choices.'
       : 'Android read aloud is starting up. If it stays unavailable, enable an English system voice in Android settings.'
     : 'Only private on-device browser voices are listed. Sweetdreams Calm uses a slower, softer profile with longer pauses for sleep.';
 
@@ -316,6 +343,14 @@ export default function App() {
   }, [preferences, selectedRoutineId]);
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(NATIVE_VOICE_KEY, selectedNativeVoiceId);
+    } catch (error) {
+      console.error("Unable to save the selected local voice:", error);
+    }
+  }, [selectedNativeVoiceId]);
+
+  useEffect(() => {
     if (!('speechSynthesis' in window)) return;
 
     const loadVoices = () => {
@@ -336,11 +371,32 @@ export default function App() {
     let retryHandle: number | null = null;
     let attempts = 0;
 
+    const refreshNativeVoices = () => {
+      void NativeTts.listVoices()
+        .then(({ voices, selectedVoiceId }) => {
+          if (!mounted) return;
+          const visibleVoices = voices.filter(voice => voice.available);
+          const nextVoices = visibleVoices.length ? visibleVoices : voices;
+          setNativeVoices(nextVoices);
+          setSelectedNativeVoiceId(prev => {
+            if (nextVoices.some(voice => voice.id === prev)) return prev;
+            if (selectedVoiceId && nextVoices.some(voice => voice.id === selectedVoiceId)) return selectedVoiceId;
+            return nextVoices[0]?.id || 'android-system';
+          });
+        })
+        .catch(error => {
+          if (!mounted) return;
+          console.warn("Native TTS voice list failed:", error);
+          setNativeVoices([]);
+        });
+    };
+
     const checkNativeTts = () => {
       void NativeTts.isAvailable()
         .then(({ available }) => {
           if (!mounted) return;
           setNativeTtsAvailable(available);
+          refreshNativeVoices();
           if (!available && attempts < 8) {
             attempts += 1;
             retryHandle = window.setTimeout(checkNativeTts, 500);
@@ -580,6 +636,18 @@ export default function App() {
 
   const handleVoiceChange = (voiceURI: string) => {
     stopNarration();
+    if (isNativeTtsRuntime) {
+      const nextVoiceId = voiceURI || 'android-system';
+      setSelectedNativeVoiceId(nextVoiceId);
+      void NativeTts.selectVoice({ voiceId: nextVoiceId })
+        .catch(error => {
+          console.warn("Native voice selection failed:", error);
+          setSelectedNativeVoiceId('android-system');
+          setError("That local voice is no longer available. Using the Android system bedtime voice.");
+        });
+      return;
+    }
+
     setSelectedVoiceURI(voiceURI);
   };
 
@@ -767,6 +835,7 @@ export default function App() {
         rate: narrationSettings.rate,
         pitch: narrationSettings.pitch,
         volume: narrationSettings.volume,
+        voiceId: selectedNativeVoice?.id || selectedNativeVoiceId || 'android-system',
       });
       return true;
     } catch (error) {
@@ -1340,19 +1409,29 @@ export default function App() {
                           <select
                             value={voiceSelectValue}
                             onChange={(e) => handleVoiceChange(e.target.value)}
-                            disabled={isPlaying || !availableVoices.length}
+                            disabled={isPlaying || (isNativeTtsRuntime ? !nativeVoiceCanChange : !availableVoices.length)}
                             className="w-full rounded-xl border border-white/10 bg-[#171126] px-4 py-3 text-sm text-purple-50 focus:outline-none focus:ring-2 focus:ring-purple-500/40 disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            {availableVoices.length ? (
+                            {isNativeTtsRuntime ? (
+                              nativeVoices.length ? (
+                                nativeVoices.map((voice, index) => (
+                                  <option key={voice.id} value={voice.id}>
+                                    {voice.neural ? 'Offline neural: ' : index === 0 ? 'Local: ' : ''}{voice.name}
+                                  </option>
+                                ))
+                              ) : nativeTtsAvailable ? (
+                                <option value="android-system">Android system bedtime voice</option>
+                              ) : (
+                                <option value="">Read aloud warming up</option>
+                              )
+                            ) : availableVoices.length ? (
                               availableVoices.map((voice, index) => (
                                 <option key={voice.voiceURI} value={voice.voiceURI}>
                                   {index === 0 ? 'Recommended: ' : ''}{voice.name} {voice.lang ? `(${voice.lang})` : ''}
                                 </option>
                               ))
-                            ) : nativeTtsAvailable ? (
-                              <option value="android-system">Android system bedtime voice</option>
                             ) : (
-                              <option value="">Read aloud warming up</option>
+                              <option value="">No private on-device voice found</option>
                             )}
                           </select>
 
