@@ -126,22 +126,35 @@ public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListen
         selectedVoiceId = voiceId;
 
         if (textToSpeech == null) {
-            pendingSpeakCall = call;
+            queuePendingSpeak(call);
             textToSpeech = new TextToSpeech(getContext().getApplicationContext(), this);
             return;
         }
 
         if (!ready) {
-            pendingSpeakCall = call;
+            queuePendingSpeak(call);
             return;
         }
 
         speakNow(call);
     }
 
+    // Hold a speak() request until init completes. If one is already waiting
+    // (e.g. the play button is tapped twice quickly), settle the older call so
+    // its JS promise never hangs.
+    private void queuePendingSpeak(PluginCall call) {
+        if (pendingSpeakCall != null) {
+            pendingSpeakCall.reject("Replaced by a newer read-aloud request.");
+        }
+        pendingSpeakCall = call;
+    }
+
     @PluginMethod
     public void stop(PluginCall call) {
-        pendingSpeakCall = null;
+        if (pendingSpeakCall != null) {
+            pendingSpeakCall.reject("Read-aloud was stopped before it started.");
+            pendingSpeakCall = null;
+        }
         activeUtterancePrefix = "";
         activeFinalUtteranceId = "";
         if (textToSpeech != null) {
@@ -392,7 +405,10 @@ public class NativeTtsPlugin extends Plugin implements TextToSpeech.OnInitListen
 
     @Override
     protected void handleOnDestroy() {
-        pendingSpeakCall = null;
+        if (pendingSpeakCall != null) {
+            pendingSpeakCall.reject("Read-aloud was interrupted.");
+            pendingSpeakCall = null;
+        }
         activeUtterancePrefix = "";
         activeFinalUtteranceId = "";
         if (textToSpeech != null) {

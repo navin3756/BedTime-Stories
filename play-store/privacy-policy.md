@@ -1,6 +1,6 @@
 # Sweetdreams Bedtime Stories Privacy Policy Draft
 
-Last updated: June 4, 2026
+Last updated: June 13, 2026
 
 Sweetdreams Bedtime Stories helps families create and listen to calming bedtime stories.
 
@@ -30,4 +30,4 @@ You can remove saved stories from inside the app. You can also clear app storage
 
 ## Contact
 
-For privacy questions, contact the app publisher listed in the Google Play Store listing.
+For privacy questions, contact the developer directly at info@abcdschoolofbollywood.com. You can also reach the app publisher listed in the Google Play Store listing.

@@ -370,6 +370,7 @@ export default function App() {
     let mounted = true;
     let retryHandle: number | null = null;
     let attempts = 0;
+    let lostVoiceNotified = false;
 
     const refreshNativeVoices = () => {
       void NativeTts.listVoices()
@@ -378,6 +379,25 @@ export default function App() {
           const visibleVoices = voices.filter(voice => voice.available);
           const nextVoices = visibleVoices.length ? visibleVoices : voices;
           setNativeVoices(nextVoices);
+
+          // If the voice the user had saved is no longer installed, tell them
+          // once instead of silently swapping to the system voice.
+          let storedVoiceId: string | null = null;
+          try {
+            storedVoiceId = window.localStorage.getItem(NATIVE_VOICE_KEY);
+          } catch {
+            storedVoiceId = null;
+          }
+          if (
+            !lostVoiceNotified &&
+            storedVoiceId &&
+            storedVoiceId !== 'android-system' &&
+            !nextVoices.some(voice => voice.id === storedVoiceId)
+          ) {
+            lostVoiceNotified = true;
+            setError("Your saved read-aloud voice is no longer installed on this device. Using the Android system bedtime voice instead.");
+          }
+
           setSelectedNativeVoiceId(prev => {
             if (nextVoices.some(voice => voice.id === prev)) return prev;
             if (selectedVoiceId && nextVoices.some(voice => voice.id === selectedVoiceId)) return selectedVoiceId;
