@@ -369,6 +369,7 @@ export default function App() {
 
     let mounted = true;
     let retryHandle: number | null = null;
+    const voiceRetryHandles = new Set<number>();
     let attempts = 0;
     let voiceFetchAttempts = 0;
     let lostVoiceNotified = false;
@@ -413,9 +414,11 @@ export default function App() {
           // have and retry a few times.
           if (voiceFetchAttempts < 6) {
             voiceFetchAttempts += 1;
-            window.setTimeout(() => {
+            const voiceRetryHandle = window.setTimeout(() => {
+              voiceRetryHandles.delete(voiceRetryHandle);
               if (mounted) refreshNativeVoices();
             }, 600);
+            voiceRetryHandles.add(voiceRetryHandle);
           }
         });
     };
@@ -443,6 +446,8 @@ export default function App() {
     return () => {
       mounted = false;
       if (retryHandle) window.clearTimeout(retryHandle);
+      voiceRetryHandles.forEach(handle => window.clearTimeout(handle));
+      voiceRetryHandles.clear();
     };
   }, []);
 
@@ -632,14 +637,40 @@ export default function App() {
       gain,
       oscillators,
       noise,
-      stop: () => {
-        gain.gain.setTargetAtTime(0.0001, context.currentTime, 0.2);
-        window.setTimeout(() => {
-          oscillators.forEach(oscillator => oscillator.stop());
-          noise?.stop();
-          context.close();
-        }, 400);
-      },
+      stop: (() => {
+        let stopped = false;
+
+        return () => {
+          if (stopped) return;
+          stopped = true;
+
+          gain.gain.setTargetAtTime(0.0001, context.currentTime, 0.2);
+          window.setTimeout(() => {
+            oscillators.forEach(oscillator => {
+              try {
+                oscillator.stop();
+              } catch {
+                // The node may already be stopped during browser teardown.
+              }
+              oscillator.disconnect();
+            });
+            if (noise) {
+              try {
+                noise.stop();
+              } catch {
+                // The node may already be stopped during browser teardown.
+              }
+              noise.disconnect();
+            }
+            gain.disconnect();
+            if (context.state !== 'closed') {
+              void context.close().catch(error => {
+                console.warn('Background audio cleanup failed:', error);
+              });
+            }
+          }, 400);
+        };
+      })(),
     };
   };
 
@@ -703,7 +734,10 @@ export default function App() {
 
     NativeTts.addListener('finished', () => {
       if (mounted && !narrationStopRequestedRef.current) setIsPlaying(false);
-    }).then(handle => handles.push(handle)).catch(error => {
+    }).then(handle => {
+      if (mounted) handles.push(handle);
+      else void handle.remove();
+    }).catch(error => {
       console.warn("Native TTS finished listener failed:", error);
     });
 
@@ -711,7 +745,10 @@ export default function App() {
       if (!mounted || narrationStopRequestedRef.current) return;
       setIsPlaying(false);
       setError(payload?.error || "Read aloud stopped unexpectedly. Try another voice, or read the story on screen.");
-    }).then(handle => handles.push(handle)).catch(error => {
+    }).then(handle => {
+      if (mounted) handles.push(handle);
+      else void handle.remove();
+    }).catch(error => {
       console.warn("Native TTS error listener failed:", error);
       // Without this listener, a native failure after speak() resolves would be
       // lost silently. Let the user know narration may stop without a message.
